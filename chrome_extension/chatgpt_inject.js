@@ -198,6 +198,9 @@
 
     applyValue(input, prompt);
 
+    // Wait briefly so ChatGPT's UI has time to enable the send control after paste
+    await new Promise((r) => setTimeout(r, 250));
+
     let sendButton = findSendButton();
     if (sendButton) {
       const ok = await waitForButtonEnabled(sendButton, 4000);
