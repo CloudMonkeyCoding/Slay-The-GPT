@@ -213,17 +213,31 @@ async function fetchState({ full = false, refresh = true } = {}) {
 
 async function refreshState({ silent = false } = {}) {
   const wantFull = stateDisplayPreference();
+  if (!silent) {
+    log(`Manual state refresh requested. Want full state: ${wantFull}`, "debug");
+  } else {
+    log(`Background state refresh running. Want full state: ${wantFull}`, "debug");
+  }
   const output = document.getElementById("state-output");
   output.textContent = "Loading...";
   try {
+    log("Requesting trimmed state from bridge.", "debug");
     const trimmed = await fetchState({ full: false, refresh: true });
     lastTrimmedState = trimmed;
+    log(
+      trimmed && Object.keys(trimmed).length
+        ? `Trimmed state received with ${Object.keys(trimmed).length} key(s).`
+        : "Trimmed state fetch returned empty payload.",
+      "debug",
+    );
     let displayState = trimmed;
     if (wantFull) {
       try {
+        log("Want full state; requesting from bridge without refresh.", "debug");
         const fullState = await fetchState({ full: true, refresh: false });
         lastFullState = fullState;
         displayState = fullState;
+        log("Full state fetch succeeded for display.", "debug");
       } catch (err) {
         log(`Full state unavailable: ${err.message}`, "warning");
       }
@@ -237,10 +251,13 @@ async function refreshState({ silent = false } = {}) {
     setStateDisplay(displayState);
     if (!silent) {
       log("Fetched state", "success");
+    } else {
+      log("Background state refresh complete.", "debug");
     }
     return { trimmed, displayState };
   } catch (err) {
     output.textContent = "Error fetching state";
+    log(`State refresh encountered error: ${err.message}`, "debug");
     log(`State fetch failed: ${err.message}`, "error");
     throw err;
   }
@@ -311,13 +328,22 @@ async function getBestChatGPTTab() {
     throw new Error("Chrome tabs API unavailable in this context.");
   }
 
+  log("Starting chatgpt.com tab discovery.", "debug");
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (activeTab) {
+    log(`Last focused active tab: ${describeTabUrl(activeTab)}`, "debug");
+  } else {
+    log("No last-focused active tab returned by chrome.tabs.query.", "debug");
+  }
   if (activeTab && (isChatGPTUrl(activeTab.url) || isChatGPTUrl(activeTab.pendingUrl))) {
+    log("Last-focused active tab is already chatgpt.com; using it.", "debug");
     return activeTab;
   }
 
   const activeTabs = await chrome.tabs.query({ active: true });
+  log(`Scanning ${activeTabs.length} active tab(s) across all windows for chatgpt.com.`, "debug");
   for (const tab of activeTabs) {
+    log(`Checking active tab candidate: ${describeTabUrl(tab)}`, "debug");
     if (isChatGPTUrl(tab.url) || isChatGPTUrl(tab.pendingUrl)) {
       if (tab.id !== (activeTab && activeTab.id)) {
         log(
@@ -331,9 +357,21 @@ async function getBestChatGPTTab() {
   }
 
   const candidates = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  log(
+    candidates && candidates.length
+      ? `Found ${candidates.length} historical chatgpt.com tab candidate(s).`
+      : "No chatgpt.com tabs found by URL search.",
+    "debug",
+  );
   if (candidates && candidates.length > 0) {
     candidates.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
     const recent = candidates[0];
+    log(
+      recent
+        ? `Most recently accessed chatgpt.com tab: ${describeTabUrl(recent)}`
+        : "Unable to determine most recent chatgpt.com tab despite candidates list.",
+      "debug",
+    );
     if (recent) {
       if (recent.id !== (activeTab && activeTab.id)) {
         log(
@@ -349,6 +387,7 @@ async function getBestChatGPTTab() {
   const details = activeTab
     ? `Active tab URL detected: ${describeTabUrl(activeTab)}`
     : "No active tab detected.";
+  log(`ChatGPT tab discovery failed. ${details}`, "debug");
   throw new Error(`Could not find a chatgpt.com tab. ${details}`);
 }
 
@@ -356,26 +395,37 @@ async function sendPromptToChatGPT(prompt) {
   if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.sendMessage) {
     throw new Error("Chrome tabs messaging API unavailable in this context.");
   }
+  log("Resolving ChatGPT tab before sending prompt.", "debug");
   const tab = await getBestChatGPTTab();
+  log(`Resolved ChatGPT tab ${tab.id} (${describeTabUrl(tab)}). Sending prompt message.`, "debug");
   const response = await new Promise((resolve, reject) => {
     try {
       chrome.tabs.sendMessage(tab.id, { type: "SEND_PROMPT", prompt }, (reply) => {
         if (chrome.runtime && chrome.runtime.lastError) {
+          log(
+            `chrome.tabs.sendMessage reported runtime error: ${chrome.runtime.lastError.message}`,
+            "debug",
+          );
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
+        log("Received response payload from ChatGPT tab content script.", "debug");
         resolve(reply);
       });
     } catch (err) {
+      log(`chrome.tabs.sendMessage threw synchronously: ${err.message}`, "debug");
       reject(err);
     }
   });
   if (response && response.ok) {
+    log("Content script acknowledged prompt send.", "debug");
     return;
   }
   if (response && response.error) {
+    log(`Content script responded with error: ${response.error}`, "debug");
     throw new Error(response.error);
   }
+  log("Content script gave no response to prompt message.", "debug");
   throw new Error("No response from ChatGPT content script. Reload the tab and try again.");
 }
 
@@ -383,15 +433,24 @@ async function planAction({ execute }) {
   const planOutput = document.getElementById("plan-output");
   planOutput.textContent = "Preparing prompt...";
   try {
+    log("Starting planner flow: refreshing state for prompt generation.", "debug");
     const { trimmed } = await refreshState({ silent: true });
+    log(
+      trimmed && Object.keys(trimmed).length
+        ? `Trimmed state fetched with ${Object.keys(trimmed).length} top-level key(s).`
+        : "Trimmed state fetch returned empty payload.",
+      "debug",
+    );
     if (!trimmed || Object.keys(trimmed).length === 0) {
       throw new Error("No state received before planning.");
     }
     const sendTrimmed = document.getElementById("trimmed-to-gpt").checked;
     settings.sendTrimmedState = sendTrimmed;
+    log(`Planner using ${sendTrimmed ? "trimmed" : "full"} state payload.`, "debug");
     let payload = trimmed;
     if (!sendTrimmed) {
       try {
+        log("Fetching full state payload for planner.", "debug");
         const fullState = await fetchState({ full: true, refresh: false });
         lastFullState = fullState;
         if (stateDisplayPreference()) {
@@ -399,12 +458,15 @@ async function planAction({ execute }) {
         }
         payload = fullState;
       } catch (err) {
+        log(`Full state fetch failed inside planner: ${err.message}`, "debug");
         throw new Error(`Failed to fetch full state: ${err.message}`);
       }
     }
+    log("Building planner prompt text.", "debug");
     const prompt = buildPlannerPrompt(payload);
     setPromptDisplay(prompt);
     try {
+      log("Attempting to deliver planner prompt to ChatGPT tab.", "debug");
       await sendPromptToChatGPT(prompt);
       log("Prompt sent to ChatGPT.", "success");
       if (execute) {
