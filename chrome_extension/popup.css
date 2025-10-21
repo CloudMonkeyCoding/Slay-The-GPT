@@ -193,3 +193,14 @@ form {
 section {
   margin-bottom: 16px;
 }
+
+.note {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #c8ccd4;
+}
+
+.note strong {
+  color: #f5f7fa;
+}

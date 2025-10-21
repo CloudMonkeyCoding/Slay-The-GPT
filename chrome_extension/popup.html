@@ -29,25 +29,15 @@
     </section>
 
     <section>
-      <h2>Planner Controls</h2>
-      <div class="field inline-group">
-        <label class="field">
-          OpenAI API Key
-          <input
-            type="password"
-            id="api-key"
-            placeholder="sk-..."
-            spellcheck="false"
-          />
-        </label>
-        <label class="field">
-          Model
-          <input type="text" id="model-name" placeholder="gpt-5" />
-        </label>
-      </div>
+      <h2>ChatGPT Planner</h2>
+      <p class="note">
+        Open <strong>chat.openai.com</strong> in the current tab before using these buttons.
+        The extension will paste the prompt into the ChatGPT composer and press send for
+        you.
+      </p>
       <label class="field checkbox">
         <input type="checkbox" id="trimmed-to-gpt" checked />
-        <span>Send trimmed snapshot to GPT (otherwise send full envelope)</span>
+        <span>Send trimmed snapshot to ChatGPT (otherwise send the full envelope)</span>
       </label>
       <div class="buttons-row">
         <button id="plan-execute" type="button">Plan + Execute</button>
@@ -81,9 +71,9 @@
 
     <section>
       <div class="output-title">
-        <h2>Last Plan</h2>
+        <h2>Last Prompt</h2>
         <button id="copy-plan" type="button" class="button-secondary button-small">
-          Copy JSON
+          Copy Prompt
         </button>
       </div>
       <pre id="plan-output" class="output"></pre>

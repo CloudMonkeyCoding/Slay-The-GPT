@@ -1,10 +1,6 @@
 const DEFAULT_HOST = "http://127.0.0.1:8123";
-const DEFAULT_MODEL = "gpt-5";
-
 const STORAGE_DEFAULTS = {
   bridgeHost: DEFAULT_HOST,
-  openaiApiKey: "",
-  openaiModel: DEFAULT_MODEL,
   sendTrimmedState: true,
 };
 
@@ -67,7 +63,7 @@ let settings = { ...STORAGE_DEFAULTS };
 let lastTrimmedState = null;
 let lastFullState = null;
 let lastStateJSON = "";
-let lastPlanJSON = "";
+let lastPromptText = "";
 
 function storageAvailable() {
   return typeof chrome !== "undefined" && !!(chrome.storage && chrome.storage.local);
@@ -82,8 +78,6 @@ async function loadSettings() {
     chrome.storage.local.get(STORAGE_DEFAULTS, (items) => {
       settings = {
         bridgeHost: (items.bridgeHost || DEFAULT_HOST).replace(/\/$/, ""),
-        openaiApiKey: items.openaiApiKey || "",
-        openaiModel: items.openaiModel || DEFAULT_MODEL,
         sendTrimmedState:
           typeof items.sendTrimmedState === "boolean" ? items.sendTrimmedState : true,
       };
@@ -101,8 +95,6 @@ async function persistSettings(partial) {
     chrome.storage.local.set(
       {
         bridgeHost: settings.bridgeHost,
-        openaiApiKey: settings.openaiApiKey,
-        openaiModel: settings.openaiModel,
         sendTrimmedState: settings.sendTrimmedState,
       },
       resolve,
@@ -112,32 +104,17 @@ async function persistSettings(partial) {
 
 function applySettingsToInputs() {
   const hostInput = document.getElementById("host-input");
-  const apiKeyInput = document.getElementById("api-key");
-  const modelInput = document.getElementById("model-name");
   const trimmedCheckbox = document.getElementById("trimmed-to-gpt");
 
   hostInput.value = settings.bridgeHost;
-  apiKeyInput.value = settings.openaiApiKey;
-  modelInput.value = settings.openaiModel;
   trimmedCheckbox.checked = settings.sendTrimmedState;
-}
-
-function readPlannerConfigFromInputs() {
-  const apiKey = document.getElementById("api-key").value.trim() || settings.openaiApiKey;
-  const model = document.getElementById("model-name").value.trim() || settings.openaiModel;
-  const sendTrimmed = document.getElementById("trimmed-to-gpt").checked;
-  return { apiKey, model, sendTrimmed };
 }
 
 function readSettingsFromInputs() {
   const hostValue = (document.getElementById("host-input").value || "").trim() || DEFAULT_HOST;
-  const apiKey = document.getElementById("api-key").value.trim();
-  const model = document.getElementById("model-name").value.trim() || DEFAULT_MODEL;
   const sendTrimmed = document.getElementById("trimmed-to-gpt").checked;
   return {
     bridgeHost: hostValue.replace(/\/$/, ""),
-    openaiApiKey: apiKey,
-    openaiModel: model,
     sendTrimmedState: sendTrimmed,
   };
 }
@@ -194,15 +171,15 @@ function setStateDisplay(state) {
   output.textContent = lastStateJSON;
 }
 
-function setPlanDisplay(sequence) {
+function setPromptDisplay(prompt) {
   const output = document.getElementById("plan-output");
-  if (!sequence) {
-    lastPlanJSON = "";
+  if (!prompt) {
+    lastPromptText = "";
     output.textContent = "";
     return;
   }
-  lastPlanJSON = JSON.stringify({ sequence }, null, 2);
-  output.textContent = lastPlanJSON;
+  lastPromptText = prompt;
+  output.textContent = lastPromptText;
 }
 
 async function refreshHealth() {
@@ -302,147 +279,132 @@ async function snapshotAction() {
   }
 }
 
-function extractSequenceFromText(text) {
-  if (!text) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-    if (parsed && Array.isArray(parsed.sequence)) {
-      return parsed.sequence;
-    }
-  } catch (err) {
-    // fall through to empty
-  }
-  return [];
+function buildPlannerPrompt(payload) {
+  const schemaText = JSON.stringify(ACTION_SCHEMA.schema, null, 2);
+  const stateJSON = JSON.stringify(payload, null, 2);
+  return [
+    SYSTEM_INSTRUCTIONS,
+    "",
+    "Action schema (JSON Schema):",
+    schemaText,
+    "",
+    "Current run state JSON:",
+    stateJSON,
+    "",
+    "Return only the sequence object that matches the schema.",
+  ].join("\n");
 }
 
-function sanitizeSequence(sequence) {
-  if (!Array.isArray(sequence)) {
-    return [];
+async function ensureChatGPTTab() {
+  if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.query) {
+    throw new Error("Chrome tabs API unavailable in this context.");
   }
-  return sequence
-    .filter((step) => step && typeof step === "object" && typeof step.command === "string")
-    .map((step) => ({
-      command: step.command,
-      args:
-        step.args && typeof step.args === "object" && !Array.isArray(step.args) ? step.args : {},
-    }));
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const activeTab = tabs && tabs[0];
+  if (!activeTab) {
+    throw new Error("No active tab found. Open chat.openai.com first.");
+  }
+  const url = activeTab.url || "";
+  if (!/^https:\/\/chat\.openai\.com(?:\/|$)/.test(url)) {
+    throw new Error("Active tab must be chat.openai.com before sending the prompt.");
+  }
+  return activeTab;
 }
 
-async function callResponsesAPI(payload, config) {
-  log(`Planning with Responses API using model ${config.model}`, "info");
-  const body = {
-    model: config.model,
-    response_format: { type: "json_schema", json_schema: ACTION_SCHEMA },
-    input: [
-      { role: "system", content: SYSTEM_INSTRUCTIONS },
-      {
-        role: "user",
-        content: `Current run state JSON:\n${JSON.stringify(payload)}\nReturn only the sequence object that matches the schema.`,
-      },
-    ],
-    max_output_tokens: 800,
-  };
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
+async function sendPromptToChatGPT(prompt) {
+  if (typeof chrome === "undefined" || !chrome.scripting || !chrome.scripting.executeScript) {
+    throw new Error("Chrome scripting API unavailable in this context.");
+  }
+  const tab = await ensureChatGPTTab();
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    args: [prompt],
+    func: (message) => {
+      const candidates = [
+        () => document.querySelector('textarea[data-id]'),
+        () => document.querySelector('textarea'),
+        () => document.querySelector('[contenteditable="true"][data-testid="conversation-input"]'),
+        () => document.querySelector('[contenteditable="true"][data-id]'),
+        () => document.querySelector('[contenteditable="true"]'),
+      ];
+      let input = null;
+      const isVisible = (el) => {
+        if (!el) {
+          return false;
+        }
+        const style = window.getComputedStyle(el);
+        return style && style.visibility !== "hidden" && style.display !== "none";
+      };
+      for (const finder of candidates) {
+        const candidate = finder();
+        if (candidate && isVisible(candidate)) {
+          input = candidate;
+          break;
+        }
+      }
+      if (!input) {
+        throw new Error("ChatGPT message box not found.");
+      }
+      const applyValue = (el, value) => {
+        if ("value" in el) {
+          el.focus();
+          el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          el.focus();
+          const escapeHTML = (str) =>
+            String(str)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          el.innerHTML = escapeHTML(value).replace(/\n/g, "<br>");
+          const selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            selection.addRange(range);
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      };
+      applyValue(input, message);
+      const sendButton =
+        document.querySelector('button[data-testid="send-button"]') ||
+        document.querySelector('button[aria-label*="Send"]') ||
+        document.querySelector('button[aria-label*="submit"]');
+      if (!sendButton) {
+        throw new Error("ChatGPT send button not found.");
+      }
+      sendButton.click();
+      return { ok: true };
     },
-    body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Responses API error ${res.status}: ${detail}`);
+  const result = results && results[0];
+  if (result && result.result && result.result.ok) {
+    return;
   }
-  const data = await res.json();
-  const parsed = data?.output?.[0]?.content?.[0]?.parsed;
-  if (parsed && Array.isArray(parsed.sequence)) {
-    return parsed.sequence;
+  if (result && result.error) {
+    throw new Error(result.error);
   }
-  const text = data.output_text || data?.output?.[0]?.content?.[0]?.text || "";
-  const seq = extractSequenceFromText(text);
-  if (seq.length) {
-    return seq;
-  }
-  throw new Error("Responses API returned no parsable sequence.");
-}
-
-async function callChatCompletionsAPI(payload, config) {
-  log(`Falling back to Chat Completions with model ${config.model}`, "warning");
-  const body = {
-    model: config.model,
-    response_format: { type: "json_object" },
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content:
-          SYSTEM_INSTRUCTIONS +
-          "\nReturn ONLY a JSON object of the form {\"sequence\": [...]}.",
-      },
-      {
-        role: "user",
-        content: `Current run state JSON:\n${JSON.stringify(payload)}\nReturn only the sequence object that matches the schema.`,
-      },
-    ],
-    max_tokens: 800,
-  };
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Chat Completions error ${res.status}: ${detail}`);
-  }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || "";
-  const parsed = extractSequenceFromText(content);
-  if (Array.isArray(parsed)) {
-    return parsed;
-  }
-  throw new Error("Chat Completions returned no parsable sequence.");
-}
-
-async function requestPlan(payload) {
-  const config = readPlannerConfigFromInputs();
-  if (!config.apiKey) {
-    throw new Error("OpenAI API key required. Save it in the planner controls.");
-  }
-  config.model = config.model || DEFAULT_MODEL;
-  settings.openaiApiKey = config.apiKey;
-  settings.openaiModel = config.model;
-  settings.sendTrimmedState = config.sendTrimmed;
-  let sequence;
-  try {
-    sequence = await callResponsesAPI(payload, config);
-  } catch (err) {
-    log(err.message, "warning");
-    sequence = await callChatCompletionsAPI(payload, config);
-  }
-  return sanitizeSequence(sequence);
+  throw new Error("Failed to dispatch prompt to ChatGPT.");
 }
 
 async function planAction({ execute }) {
   const planOutput = document.getElementById("plan-output");
-  planOutput.textContent = "Planning...";
+  planOutput.textContent = "Preparing prompt...";
   try {
     const { trimmed } = await refreshState({ silent: true });
     if (!trimmed || Object.keys(trimmed).length === 0) {
       throw new Error("No state received before planning.");
     }
-    const config = readPlannerConfigFromInputs();
+    const sendTrimmed = document.getElementById("trimmed-to-gpt").checked;
+    settings.sendTrimmedState = sendTrimmed;
     let payload = trimmed;
-    if (!config.sendTrimmed) {
+    if (!sendTrimmed) {
       try {
         const fullState = await fetchState({ full: true, refresh: false });
         lastFullState = fullState;
@@ -454,23 +416,23 @@ async function planAction({ execute }) {
         throw new Error(`Failed to fetch full state: ${err.message}`);
       }
     }
-    const sequence = await requestPlan(payload);
-    setPlanDisplay(sequence);
-    if (!sequence.length) {
-      log("Planner returned no steps.", "warning");
-      return;
-    }
-    if (execute) {
-      const resp = await fetchJSON("/sequence", {
-        method: "POST",
-        body: JSON.stringify({ steps: sequence }),
-      });
-      log(`Sequence executed: ${JSON.stringify(resp)}`, "success");
-    } else {
-      log("Plan ready (not executed).", "success");
+    const prompt = buildPlannerPrompt(payload);
+    setPromptDisplay(prompt);
+    try {
+      await sendPromptToChatGPT(prompt);
+      log("Prompt sent to ChatGPT.", "success");
+      if (execute) {
+        log(
+          "After ChatGPT replies with a sequence, paste it into Send Sequence to execute.",
+          "info",
+        );
+      }
+    } catch (err) {
+      log(`Could not send prompt automatically: ${err.message}`, "warning");
+      log("Copy the prompt and paste it into ChatGPT manually.", "info");
     }
   } catch (err) {
-    planOutput.textContent = "Planning failed.";
+    planOutput.textContent = "Prompt generation failed.";
     log(`Planning failed: ${err.message}`, "error");
   }
 }
@@ -589,12 +551,12 @@ async function copyDisplayedState() {
   await copyToClipboard(lastStateJSON, "Displayed state");
 }
 
-async function copyPlanJSON() {
-  if (!lastPlanJSON) {
-    log("No plan available to copy", "warning");
+async function copyPromptText() {
+  if (!lastPromptText) {
+    log("No prompt available to copy", "warning");
     return;
   }
-  await copyToClipboard(lastPlanJSON, "Plan JSON");
+  await copyToClipboard(lastPromptText, "Planner prompt");
 }
 
 async function init() {
@@ -612,7 +574,7 @@ async function init() {
   document.getElementById("quit-button").addEventListener("click", () => window.close());
   document.getElementById("full-state").addEventListener("change", onFullStateToggle);
   document.getElementById("copy-state").addEventListener("click", () => copyDisplayedState());
-  document.getElementById("copy-plan").addEventListener("click", () => copyPlanJSON());
+  document.getElementById("copy-plan").addEventListener("click", () => copyPromptText());
 
   document.getElementById("command-form").addEventListener("submit", sendCommand);
   document.getElementById("sequence-form").addEventListener("submit", sendSequence);
