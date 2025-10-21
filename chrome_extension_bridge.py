@@ -29,6 +29,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 HOST = os.environ.get("CHROME_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CHROME_BRIDGE_PORT", "8123"))
@@ -303,13 +304,20 @@ class ChromeBridgeHandler(BaseHTTPRequestHandler):
         self._set_headers(HTTPStatus.NO_CONTENT)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path.startswith("/health"):
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             self._set_headers()
             self.wfile.write(b"{\"status\": \"ok\"}")
             return
-        if self.path.startswith("/state"):
-            full = "full=1" in self.path or "full=true" in self.path.lower()
-            state = controller.get_state(full=full)
+        if parsed.path == "/state":
+            params = parse_qs(parsed.query)
+            full = False
+            refresh = True
+            if "full" in params:
+                full = any(value.lower() in ("1", "true", "yes") for value in params.get("full", []))
+            if "refresh" in params:
+                refresh = not any(value.lower() in ("0", "false", "no") for value in params.get("refresh", []))
+            state = controller.get_state(full=full, refresh=refresh)
             if state is None:
                 self._set_headers(HTTPStatus.BAD_GATEWAY)
                 self.wfile.write(b"{\"error\": \"no_state\"}")

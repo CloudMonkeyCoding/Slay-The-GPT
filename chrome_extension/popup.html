@@ -21,19 +21,72 @@
           spellcheck="false"
         />
       </label>
-      <div class="buttons">
-        <button id="save-host" type="button">Save</button>
+      <div class="buttons-column">
+        <button id="save-settings" type="button">Save Settings</button>
         <button id="refresh-health" type="button">Health</button>
-        <button id="refresh-state" type="button">State</button>
+        <button id="snapshot-button" type="button">Snapshot</button>
       </div>
     </section>
 
     <section>
-      <h2>State Snapshot</h2>
-      <label>
-        <input type="checkbox" id="full-state" /> Request full envelope
+      <h2>Planner Controls</h2>
+      <div class="field inline-group">
+        <label class="field">
+          OpenAI API Key
+          <input
+            type="password"
+            id="api-key"
+            placeholder="sk-..."
+            spellcheck="false"
+          />
+        </label>
+        <label class="field">
+          Model
+          <input type="text" id="model-name" placeholder="gpt-5" />
+        </label>
+      </div>
+      <label class="field checkbox">
+        <input type="checkbox" id="trimmed-to-gpt" checked />
+        <span>Send trimmed snapshot to GPT (otherwise send full envelope)</span>
       </label>
+      <div class="buttons-row">
+        <button id="plan-execute" type="button">Plan + Execute</button>
+        <button id="plan-only" type="button" class="button-secondary">
+          Plan only
+        </button>
+        <button id="refresh-state" type="button" class="button-secondary">
+          Refresh state
+        </button>
+        <button id="quit-button" type="button" class="button-danger">
+          Quit
+        </button>
+      </div>
+    </section>
+
+    <section>
+      <div class="output-title">
+        <h2>Latest Snapshot</h2>
+        <div class="title-actions">
+          <label class="field checkbox">
+            <input type="checkbox" id="full-state" />
+            <span>Display full envelope</span>
+          </label>
+          <button id="copy-state" type="button" class="button-secondary button-small">
+            Copy JSON
+          </button>
+        </div>
+      </div>
       <pre id="state-output" class="output"></pre>
+    </section>
+
+    <section>
+      <div class="output-title">
+        <h2>Last Plan</h2>
+        <button id="copy-plan" type="button" class="button-secondary button-small">
+          Copy JSON
+        </button>
+      </div>
+      <pre id="plan-output" class="output"></pre>
     </section>
 
     <section>

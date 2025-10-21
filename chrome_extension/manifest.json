@@ -3,10 +3,11 @@
   "name": "Slay the GPT Bridge",
   "description": "Chrome extension interface for the Slay the Spire CommunicationMod bridge.",
   "version": "0.1.0",
-  "permissions": ["storage"],
+  "permissions": ["storage", "clipboardWrite"],
   "host_permissions": [
     "http://127.0.0.1:8123/*",
-    "http://localhost:8123/*"
+    "http://localhost:8123/*",
+    "https://api.openai.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

@@ -5,8 +5,8 @@
 }
 
 body {
-  min-width: 360px;
-  max-width: 420px;
+  min-width: 380px;
+  max-width: 460px;
   margin: 0;
   padding: 16px;
   background: #121416;
@@ -41,12 +41,6 @@ h2 {
   flex: 1 1 auto;
 }
 
-.controls .buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 button {
   padding: 6px 10px;
   border: none;
@@ -65,11 +59,57 @@ button:active {
   transform: translateY(1px);
 }
 
+.button-small {
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.buttons-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.buttons-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.button-secondary {
+  background: #363b44;
+}
+
+.button-secondary:hover {
+  background: #2a2f37;
+}
+
+.button-danger {
+  background: #9a1a1a;
+}
+
+.button-danger:hover {
+  background: #7d1414;
+}
+
 .field {
   display: flex;
   flex-direction: column;
   margin-bottom: 8px;
   gap: 4px;
+}
+
+.field.inline-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 textarea {
@@ -83,12 +123,18 @@ textarea {
 }
 
 select,
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   border-radius: 4px;
   border: 1px solid #2c313a;
   padding: 6px;
   background: #1c1f24;
   color: inherit;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
 }
 
 pre.output {
@@ -100,6 +146,23 @@ pre.output {
   background: #0d0f12;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.output-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.title-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.title-actions .field {
+  margin-bottom: 0;
 }
 
 .status {
