@@ -39,9 +39,13 @@ browser tab, so no API key or model selection is required.
   JSON to your clipboard. Use the "Display full envelope" checkbox if you want
   to view the full CommunicationMod payload without affecting what is sent to
   GPT.
-- Before planning, open chatgpt.com in the current tab and place the cursor
+- Before planning, open chatgpt.com (any conversation path such as
+  `https://chatgpt.com/c/...` works) in the current tab and place the cursor
   in the conversation you want to use. The extension validates the active tab
   and will log a warning if it cannot reach the ChatGPT UI automatically.
+- If Chrome prompts you to grant access to chatgpt.com, approve it so the
+  extension can detect the tab URL and inject the helper script. You can also
+  grant the permission in the site access section of the extensions page later.
 - If you see a warning about the ChatGPT content script, reload the
   chatgpt.com tab (or open a new conversation) so Chrome reinjects the
   helper before retrying.

@@ -312,8 +312,74 @@ function buildPlannerPrompt(payload) {
   ].join("\n");
 }
 
+const CHATGPT_ORIGIN = "https://chatgpt.com/*";
+
 function isChatGPTUrl(url) {
-  return /^https:\/\/chatgpt\.com(?:\/|$)/.test(url || "");
+  if (typeof url !== "string") {
+    return false;
+  }
+  return url === "https://chatgpt.com" || url.startsWith("https://chatgpt.com/");
+}
+
+function looksLikeChatGPT(tab) {
+  if (!tab) {
+    return false;
+  }
+  if (isChatGPTUrl(tab.url) || isChatGPTUrl(tab.pendingUrl)) {
+    return true;
+  }
+  const title = tab.title || "";
+  return /chatgpt/i.test(title);
+}
+
+async function ensureChatGPTHostPermission() {
+  if (!chrome.permissions || !chrome.permissions.contains) {
+    log("chrome.permissions API unavailable; assuming chatgpt.com access granted.", "debug");
+    return;
+  }
+
+  const alreadyGranted = await new Promise((resolve) => {
+    chrome.permissions.contains({ origins: [CHATGPT_ORIGIN] }, (result) => {
+      if (chrome.runtime && chrome.runtime.lastError) {
+        log(
+          `chrome.permissions.contains failed: ${chrome.runtime.lastError.message}. Assuming no permission.`,
+          "debug",
+        );
+        resolve(false);
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+  if (alreadyGranted) {
+    log("Host permission for chatgpt.com already granted.", "debug");
+    return;
+  }
+
+  log("Requesting chatgpt.com access so the extension can read the tab URL.", "warning");
+  const granted = await new Promise((resolve) => {
+    chrome.permissions.request({ origins: [CHATGPT_ORIGIN] }, (result) => {
+      if (chrome.runtime && chrome.runtime.lastError) {
+        log(
+          `chrome.permissions.request failed: ${chrome.runtime.lastError.message}.`,
+          "error",
+        );
+        resolve(false);
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+  if (granted) {
+    log("chatgpt.com access granted. Continuing with tab discovery.", "info");
+  } else {
+    log(
+      "chatgpt.com access was not granted. Please allow the permission from the Chrome prompt and retry.",
+      "error",
+    );
+  }
 }
 
 function describeTabUrl(tab) {
@@ -329,14 +395,16 @@ async function getBestChatGPTTab() {
   }
 
   log("Starting chatgpt.com tab discovery.", "debug");
+  await ensureChatGPTHostPermission();
+
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (activeTab) {
     log(`Last focused active tab: ${describeTabUrl(activeTab)}`, "debug");
   } else {
     log("No last-focused active tab returned by chrome.tabs.query.", "debug");
   }
-  if (activeTab && (isChatGPTUrl(activeTab.url) || isChatGPTUrl(activeTab.pendingUrl))) {
-    log("Last-focused active tab is already chatgpt.com; using it.", "debug");
+  if (looksLikeChatGPT(activeTab)) {
+    log("Last-focused active tab looks like chatgpt.com; using it.", "debug");
     return activeTab;
   }
 
@@ -344,7 +412,7 @@ async function getBestChatGPTTab() {
   log(`Scanning ${activeTabs.length} active tab(s) across all windows for chatgpt.com.`, "debug");
   for (const tab of activeTabs) {
     log(`Checking active tab candidate: ${describeTabUrl(tab)}`, "debug");
-    if (isChatGPTUrl(tab.url) || isChatGPTUrl(tab.pendingUrl)) {
+    if (looksLikeChatGPT(tab)) {
       if (tab.id !== (activeTab && activeTab.id)) {
         log(
           `Using chatgpt.com tab from a different window (URL: ${describeTabUrl(tab)}). ` +
@@ -356,7 +424,7 @@ async function getBestChatGPTTab() {
     }
   }
 
-  const candidates = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  const candidates = await chrome.tabs.query({ url: [CHATGPT_ORIGIN] });
   log(
     candidates && candidates.length
       ? `Found ${candidates.length} historical chatgpt.com tab candidate(s).`
@@ -368,7 +436,7 @@ async function getBestChatGPTTab() {
     const recent = candidates[0];
     log(
       recent
-        ? `Most recently accessed chatgpt.com tab: ${describeTabUrl(recent)}`
+        ? `Most recently accessed chatgpt.com tab: ${describeTabUrl(recent)} (title: ${recent.title || "<no title>"})`
         : "Unable to determine most recent chatgpt.com tab despite candidates list.",
       "debug",
     );
