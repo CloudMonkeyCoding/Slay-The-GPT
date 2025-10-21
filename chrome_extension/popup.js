@@ -64,6 +64,7 @@ let lastTrimmedState = null;
 let lastFullState = null;
 let lastStateJSON = "";
 let lastPromptText = "";
+let lastChatGPTResponseText = "";
 
 function storageAvailable() {
   return typeof chrome !== "undefined" && !!(chrome.storage && chrome.storage.local);
@@ -125,6 +126,42 @@ function log(message, type = "info") {
   consoleEl.textContent = `[${timestamp}] (${type}) ${message}\n` + consoleEl.textContent;
 }
 
+function handleChatGPTStatus(message) {
+  if (!message || !message.status) {
+    return;
+  }
+  const status = message.status;
+  switch (status) {
+    case "prompt_submitted":
+      log("ChatGPT prompt submitted; waiting for response...", "debug");
+      break;
+    case "waiting_for_response":
+      log("Waiting for ChatGPT to finish responding...", "info");
+      break;
+    case "response_streaming": {
+      const preview = (message.preview || "").replace(/\s+/g, " ").trim();
+      if (preview) {
+        const truncated = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview;
+        log(`ChatGPT streaming response preview: ${truncated}`, "debug");
+      } else {
+        log("ChatGPT has started streaming a response.", "debug");
+      }
+      break;
+    }
+    case "response_ready":
+      log(
+        `ChatGPT response finalized (${message.length !== undefined ? message.length : "unknown"} characters).`,
+        "debug",
+      );
+      break;
+    case "response_error":
+      log(`ChatGPT response error: ${message.error || "unknown error"}`, "error");
+      break;
+    default:
+      log(`ChatGPT status update: ${status}`, "debug");
+  }
+}
+
 function setHealth(status, text) {
   const el = document.getElementById("health");
   el.textContent = text;
@@ -180,6 +217,46 @@ function setPromptDisplay(prompt) {
   }
   lastPromptText = prompt;
   output.textContent = lastPromptText;
+}
+
+function extractJSONObjectString(text) {
+  if (!text) {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence && fence[1]) {
+    return fence[1].trim();
+  }
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+  }
+  return null;
+}
+
+function parseChatGPTSequence(text) {
+  const candidate = extractJSONObjectString(text);
+  if (!candidate) {
+    throw new Error("Could not locate a JSON object in ChatGPT's response.");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(candidate);
+  } catch (err) {
+    throw new Error(`ChatGPT response JSON parse failed: ${err.message}`);
+  }
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.sequence)) {
+    throw new Error("ChatGPT response is missing a 'sequence' array.");
+  }
+  return { steps: payload.sequence, rawJSON: candidate, payload };
 }
 
 async function refreshHealth() {
@@ -552,8 +629,12 @@ async function sendPromptToChatGPT(prompt) {
     }
   });
   if (response && response.ok) {
-    log("Content script acknowledged prompt send.", "debug");
-    return;
+    log("Content script acknowledged prompt delivery.", "debug");
+    if (response.responseText && typeof response.responseText === "string") {
+      return response.responseText;
+    }
+    log("ChatGPT response text missing from content script payload.", "warning");
+    return "";
   }
   if (response && response.error) {
     log(`Content script responded with error: ${response.error}`, "debug");
@@ -561,6 +642,45 @@ async function sendPromptToChatGPT(prompt) {
   }
   log("Content script gave no response to prompt message.", "debug");
   throw new Error("No response from ChatGPT content script. Reload the tab and try again.");
+}
+
+async function handleChatGPTReply(responseText, { execute }) {
+  lastChatGPTResponseText = (responseText || "").trim();
+  if (!lastChatGPTResponseText) {
+    log("ChatGPT response was empty; nothing to process.", "warning");
+    log("Copy the response from ChatGPT manually if one was produced.", "info");
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = parseChatGPTSequence(lastChatGPTResponseText);
+  } catch (err) {
+    log(`Failed to parse ChatGPT response: ${err.message}`, "error");
+    log("Copy the sequence directly from ChatGPT and send it via the form if needed.", "info");
+    return;
+  }
+
+  const steps = parsed.steps;
+  const preview = parsed.rawJSON.length > 140 ? `${parsed.rawJSON.slice(0, 140)}…` : parsed.rawJSON;
+  log(`ChatGPT sequence JSON captured: ${preview}`, "debug");
+
+  const field = document.getElementById("sequence-steps");
+  if (field) {
+    field.value = JSON.stringify(steps, null, 2);
+  }
+
+  log(`Captured ChatGPT sequence with ${steps.length} step(s).`, "success");
+
+  if (execute) {
+    try {
+      await postSequenceSteps(steps, { origin: "auto" });
+    } catch (err) {
+      log(`Auto sequence send failed: ${err.message}`, "error");
+    }
+  } else {
+    log("Sequence populated in the Send Sequence form for manual review.", "info");
+  }
 }
 
 async function planAction({ execute }) {
@@ -601,14 +721,9 @@ async function planAction({ execute }) {
     setPromptDisplay(prompt);
     try {
       log("Attempting to deliver planner prompt to ChatGPT tab.", "debug");
-      await sendPromptToChatGPT(prompt);
-      log("Prompt sent to ChatGPT.", "success");
-      if (execute) {
-        log(
-          "After ChatGPT replies with a sequence, paste it into Send Sequence to execute.",
-          "info",
-        );
-      }
+      const replyText = await sendPromptToChatGPT(prompt);
+      log("ChatGPT response received from content script.", "success");
+      await handleChatGPTReply(replyText, { execute });
     } catch (err) {
       log(`Could not send prompt automatically: ${err.message}`, "warning");
       log("Copy the prompt and paste it into ChatGPT manually.", "info");
@@ -653,6 +768,20 @@ async function sendCommand(event) {
   }
 }
 
+async function postSequenceSteps(steps, { origin = "manual" } = {}) {
+  if (!Array.isArray(steps)) {
+    throw new Error("Sequence must be an array of steps");
+  }
+  const label = origin === "auto" ? "Auto sequence" : "Sequence";
+  log(`Sending ${origin === "auto" ? "captured" : "manual"} sequence to bridge...`, "info");
+  const resp = await fetchJSON("/sequence", {
+    method: "POST",
+    body: JSON.stringify({ steps }),
+  });
+  log(`${label} sent: ${JSON.stringify(resp)}`, "success");
+  return resp;
+}
+
 async function sendSequence(event) {
   event.preventDefault();
   const field = document.getElementById("sequence-steps");
@@ -668,11 +797,7 @@ async function sendSequence(event) {
     return;
   }
   try {
-    const resp = await fetchJSON("/sequence", {
-      method: "POST",
-      body: JSON.stringify({ steps }),
-    });
-    log(`Sequence sent: ${JSON.stringify(resp)}`, "success");
+    await postSequenceSteps(steps, { origin: "manual" });
   } catch (err) {
     log(`Sequence failed: ${err.message}`, "error");
   }
@@ -744,6 +869,14 @@ async function copyPromptText() {
 async function init() {
   await loadSettings();
   applySettingsToInputs();
+
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message && message.type === "CHATGPT_STATUS") {
+        handleChatGPTStatus(message);
+      }
+    });
+  }
 
   document.getElementById("save-settings").addEventListener("click", saveSettings);
   document.getElementById("refresh-health").addEventListener("click", () => refreshHealth());
