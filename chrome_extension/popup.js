@@ -312,85 +312,30 @@ async function ensureChatGPTTab() {
 }
 
 async function sendPromptToChatGPT(prompt) {
-  if (typeof chrome === "undefined" || !chrome.scripting || !chrome.scripting.executeScript) {
-    throw new Error("Chrome scripting API unavailable in this context.");
+  if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.sendMessage) {
+    throw new Error("Chrome tabs messaging API unavailable in this context.");
   }
   const tab = await ensureChatGPTTab();
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    args: [prompt],
-    func: (message) => {
-      const candidates = [
-        () => document.querySelector('textarea[data-id]'),
-        () => document.querySelector('textarea'),
-        () => document.querySelector('[contenteditable="true"][data-testid="conversation-input"]'),
-        () => document.querySelector('[contenteditable="true"][data-id]'),
-        () => document.querySelector('[contenteditable="true"]'),
-      ];
-      let input = null;
-      const isVisible = (el) => {
-        if (!el) {
-          return false;
+  const response = await new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: "SEND_PROMPT", prompt }, (reply) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
         }
-        const style = window.getComputedStyle(el);
-        return style && style.visibility !== "hidden" && style.display !== "none";
-      };
-      for (const finder of candidates) {
-        const candidate = finder();
-        if (candidate && isVisible(candidate)) {
-          input = candidate;
-          break;
-        }
-      }
-      if (!input) {
-        throw new Error("ChatGPT message box not found.");
-      }
-      const applyValue = (el, value) => {
-        if ("value" in el) {
-          el.focus();
-          el.value = value;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-        } else {
-          el.focus();
-          const escapeHTML = (str) =>
-            String(str)
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#39;");
-          el.innerHTML = escapeHTML(value).replace(/\n/g, "<br>");
-          const selection = window.getSelection();
-          if (selection) {
-            selection.removeAllRanges();
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            range.collapse(false);
-            selection.addRange(range);
-          }
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      };
-      applyValue(input, message);
-      const sendButton =
-        document.querySelector('button[data-testid="send-button"]') ||
-        document.querySelector('button[aria-label*="Send"]') ||
-        document.querySelector('button[aria-label*="submit"]');
-      if (!sendButton) {
-        throw new Error("ChatGPT send button not found.");
-      }
-      sendButton.click();
-      return { ok: true };
-    },
+        resolve(reply);
+      });
+    } catch (err) {
+      reject(err);
+    }
   });
-  const result = results && results[0];
-  if (result && result.result && result.result.ok) {
+  if (response && response.ok) {
     return;
   }
-  if (result && result.error) {
-    throw new Error(result.error);
+  if (response && response.error) {
+    throw new Error(response.error);
   }
-  throw new Error("Failed to dispatch prompt to ChatGPT.");
+  throw new Error("No response from ChatGPT content script. Reload the tab and try again.");
 }
 
 async function planAction({ execute }) {

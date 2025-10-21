@@ -42,6 +42,9 @@ browser tab, so no API key or model selection is required.
 - Before planning, open chat.openai.com in the current tab and place the cursor
   in the conversation you want to use. The extension validates the active tab
   and will log a warning if it cannot reach the ChatGPT UI automatically.
+- If you see a warning about the ChatGPT content script, reload the
+  chat.openai.com tab (or open a new conversation) so Chrome reinjects the
+  helper before retrying.
 - **Plan only** and **Plan + Execute** reuse the trimmed snapshot unless you
   uncheck "Send trimmed snapshot to ChatGPT", in which case the extension grabs
   the cached full envelope before composing the message. The generated prompt is
