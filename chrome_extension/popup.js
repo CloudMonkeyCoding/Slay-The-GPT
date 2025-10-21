@@ -302,11 +302,11 @@ async function ensureChatGPTTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const activeTab = tabs && tabs[0];
   if (!activeTab) {
-    throw new Error("No active tab found. Open chat.openai.com first.");
+    throw new Error("No active tab found. Open chatgpt.com first.");
   }
   const url = activeTab.url || "";
-  if (!/^https:\/\/chat\.openai\.com(?:\/|$)/.test(url)) {
-    throw new Error("Active tab must be chat.openai.com before sending the prompt.");
+  if (!/^https:\/\/chatgpt\.com(?:\/|$)/.test(url)) {
+    throw new Error("Active tab must be chatgpt.com before sending the prompt.");
   }
   return activeTab;
 }

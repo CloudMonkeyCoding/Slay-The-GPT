@@ -11,7 +11,7 @@ the original `ai_controller_hardcoded_key.py` GUI exposed.
 - Snapshot button that fetches a trimmed state, mirrors it in the UI, and copies
   it to the clipboard for quick sharing with GPT
 - Plan only / Plan + Execute buttons that build a planner prompt and send it to
-  the active chat.openai.com tab on your behalf
+  the active chatgpt.com tab on your behalf
 - Toggle between trimmed and full CommunicationMod state snapshots for display
 - Forms to send single commands, action sequences, and log messages
 - Configurable bridge URL and trimmed/full snapshot preference persisted with
@@ -39,11 +39,11 @@ browser tab, so no API key or model selection is required.
   JSON to your clipboard. Use the "Display full envelope" checkbox if you want
   to view the full CommunicationMod payload without affecting what is sent to
   GPT.
-- Before planning, open chat.openai.com in the current tab and place the cursor
+- Before planning, open chatgpt.com in the current tab and place the cursor
   in the conversation you want to use. The extension validates the active tab
   and will log a warning if it cannot reach the ChatGPT UI automatically.
 - If you see a warning about the ChatGPT content script, reload the
-  chat.openai.com tab (or open a new conversation) so Chrome reinjects the
+  chatgpt.com tab (or open a new conversation) so Chrome reinjects the
   helper before retrying.
 - **Plan only** and **Plan + Execute** reuse the trimmed snapshot unless you
   uncheck "Send trimmed snapshot to ChatGPT", in which case the extension grabs

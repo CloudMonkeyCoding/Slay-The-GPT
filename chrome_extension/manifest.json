@@ -7,7 +7,7 @@
   "host_permissions": [
     "http://127.0.0.1:8123/*",
     "http://localhost:8123/*",
-    "https://chat.openai.com/*"
+    "https://chatgpt.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -15,7 +15,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chat.openai.com/*"],
+      "matches": ["https://chatgpt.com/*"],
       "js": ["chatgpt_inject.js"],
       "run_at": "document_idle"
     }
