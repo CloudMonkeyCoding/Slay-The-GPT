@@ -47,14 +47,46 @@
       .replace(/'/g, "&#39;");
   }
 
+  function dispatchInputEvents(el, value) {
+    try {
+      el.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertFromPaste",
+          data: value,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } catch (err) {
+      console.debug("[ChatGPT Inject] beforeinput dispatch failed (continuing)", err);
+    }
+
+    try {
+      el.dispatchEvent(
+        new InputEvent("input", {
+          inputType: "insertFromPaste",
+          data: value,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      return;
+    } catch (err) {
+      console.debug("[ChatGPT Inject] InputEvent constructor unavailable; falling back to Event", err);
+    }
+
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   function applyValue(el, value) {
+    el.focus();
+
     if ("value" in el) {
-      el.focus();
       el.value = value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      dispatchInputEvents(el, value);
       return;
     }
-    el.focus();
+
     el.innerHTML = escapeHTML(value).replace(/\n/g, "<br>");
     const selection = window.getSelection();
     if (selection) {
@@ -64,7 +96,69 @@
       range.collapse(false);
       selection.addRange(range);
     }
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    dispatchInputEvents(el, value);
+  }
+
+  function buttonEnabled(button) {
+    if (!button) {
+      return false;
+    }
+    if (button.disabled) {
+      return false;
+    }
+    const ariaDisabled = button.getAttribute("aria-disabled");
+    if (ariaDisabled && ariaDisabled.toLowerCase() !== "false") {
+      return false;
+    }
+    const style = window.getComputedStyle(button);
+    if (!style || style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") {
+      return false;
+    }
+    return true;
+  }
+
+  async function waitForButtonEnabled(button, timeoutMs = 4000) {
+    if (!button) {
+      return false;
+    }
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (buttonEnabled(button)) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return buttonEnabled(button);
+  }
+
+  function clickButton(button) {
+    const rect = button.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX,
+      clientY,
+      button: 0,
+    };
+
+    try {
+      button.dispatchEvent(new PointerEvent("pointerdown", options));
+      button.dispatchEvent(new MouseEvent("mousedown", options));
+    } catch (err) {
+      console.debug("[ChatGPT Inject] Pointer/mousedown dispatch failed (continuing)", err);
+    }
+
+    try {
+      button.dispatchEvent(new PointerEvent("pointerup", options));
+      button.dispatchEvent(new MouseEvent("mouseup", options));
+    } catch (err) {
+      console.debug("[ChatGPT Inject] Pointer/mouseup dispatch failed (continuing)", err);
+    }
+
+    button.click();
   }
 
   function findSendButton() {
@@ -102,8 +196,13 @@
       console.error("[ChatGPT Inject] Unable to locate send button after applying prompt");
       throw new Error("ChatGPT send button not found.");
     }
+    if (!(await waitForButtonEnabled(sendButton))) {
+      console.error("[ChatGPT Inject] Send button remained disabled after waiting");
+      throw new Error("ChatGPT send button disabled.");
+    }
     console.debug("[ChatGPT Inject] Clicking send button");
-    sendButton.click();
+    clickButton(sendButton);
+    console.debug("[ChatGPT Inject] Send button click dispatched");
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
