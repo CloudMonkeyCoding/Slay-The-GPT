@@ -306,7 +306,7 @@ function describeTabUrl(tab) {
   return tab.url || tab.pendingUrl || "unknown";
 }
 
-async function ensureChatGPTTab() {
+async function getBestChatGPTTab() {
   if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.query) {
     throw new Error("Chrome tabs API unavailable in this context.");
   }
@@ -314,6 +314,20 @@ async function ensureChatGPTTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (activeTab && (isChatGPTUrl(activeTab.url) || isChatGPTUrl(activeTab.pendingUrl))) {
     return activeTab;
+  }
+
+  const activeTabs = await chrome.tabs.query({ active: true });
+  for (const tab of activeTabs) {
+    if (isChatGPTUrl(tab.url) || isChatGPTUrl(tab.pendingUrl)) {
+      if (tab.id !== (activeTab && activeTab.id)) {
+        log(
+          `Using chatgpt.com tab from a different window (URL: ${describeTabUrl(tab)}). ` +
+            "If sending fails, click that tab and retry.",
+          "warning",
+        );
+      }
+      return tab;
+    }
   }
 
   const candidates = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
@@ -342,7 +356,7 @@ async function sendPromptToChatGPT(prompt) {
   if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.sendMessage) {
     throw new Error("Chrome tabs messaging API unavailable in this context.");
   }
-  const tab = await ensureChatGPTTab();
+  const tab = await getBestChatGPTTab();
   const response = await new Promise((resolve, reject) => {
     try {
       chrome.tabs.sendMessage(tab.id, { type: "SEND_PROMPT", prompt }, (reply) => {
