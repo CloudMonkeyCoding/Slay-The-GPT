@@ -220,7 +220,8 @@ def execute_step(step: Dict[str, Any]) -> None:
         if idx is None:
             log(f"[execute] uuid {uuid} not found in hand")
             return
-        send(f"card {idx}")
+        # CommunicationMod expects number keys (1-based) to select cards in hand.
+        send(f"key {idx + 1}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
 
@@ -383,4 +384,7 @@ def run_server() -> None:
 
 
 if __name__ == "__main__":
+    # Handshake so CommunicationMod connects
+    sys.stdout.write("ready\n")
+    sys.stdout.flush()
     run_server()
