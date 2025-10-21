@@ -459,12 +459,78 @@ async function getBestChatGPTTab() {
   throw new Error(`Could not find a chatgpt.com tab. ${details}`);
 }
 
+async function pingChatGPTContentScript(tabId) {
+  if (!chrome.tabs || !chrome.tabs.sendMessage) {
+    throw new Error("chrome.tabs.sendMessage unavailable for ping.");
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: "PING" }, (reply) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(Boolean(reply && reply.ok));
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function ensureChatGPTContentScript(tabId) {
+  if (!tabId) {
+    throw new Error("Cannot ensure content script without a tab id.");
+  }
+
+  try {
+    const pingResult = await pingChatGPTContentScript(tabId);
+    if (pingResult) {
+      log("ChatGPT content script responded to ping; no reinjection needed.", "debug");
+      return;
+    }
+    log("Ping response did not indicate readiness; attempting reinjection.", "debug");
+  } catch (err) {
+    log(`Initial content script ping failed: ${err.message}`, "debug");
+  }
+
+  if (!chrome.scripting || !chrome.scripting.executeScript) {
+    throw new Error("ChatGPT helper script missing and chrome.scripting API unavailable.");
+  }
+
+  log("Attempting runtime injection of chatgpt_inject.js into the ChatGPT tab.", "debug");
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["chatgpt_inject.js"],
+    });
+  } catch (err) {
+    log(`chrome.scripting.executeScript failed: ${err && err.message ? err.message : err}`, "error");
+    throw new Error(`Unable to inject ChatGPT helper script: ${err.message || err}`);
+  }
+  log("Runtime injection completed; verifying content script responsiveness.", "debug");
+
+  try {
+    const pingResult = await pingChatGPTContentScript(tabId);
+    if (pingResult) {
+      log("ChatGPT content script responsive after runtime injection.", "debug");
+      return;
+    }
+    throw new Error("Ping acknowledgement missing after runtime injection.");
+  } catch (err) {
+    log(`Content script still unavailable after reinjection attempt: ${err.message}`, "error");
+    throw new Error(`ChatGPT helper failed to initialize: ${err.message}`);
+  }
+}
+
 async function sendPromptToChatGPT(prompt) {
   if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.sendMessage) {
     throw new Error("Chrome tabs messaging API unavailable in this context.");
   }
   log("Resolving ChatGPT tab before sending prompt.", "debug");
   const tab = await getBestChatGPTTab();
+  log("Ensuring ChatGPT content script is active before sending.", "debug");
+  await ensureChatGPTContentScript(tab.id);
   log(`Resolved ChatGPT tab ${tab.id} (${describeTabUrl(tab)}). Sending prompt message.`, "debug");
   const response = await new Promise((resolve, reject) => {
     try {

@@ -107,6 +107,12 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message && message.type === "PING") {
+      console.debug("[ChatGPT Inject] Received PING message; responding with ok");
+      sendResponse({ ok: true });
+      return false;
+    }
+
     if (!message || message.type !== "SEND_PROMPT") {
       return false;
     }
