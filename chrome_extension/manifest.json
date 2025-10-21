@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Slay the GPT Bridge",
+  "description": "Chrome extension interface for the Slay the Spire CommunicationMod bridge.",
+  "version": "0.1.0",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8123/*",
+    "http://localhost:8123/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Slay the GPT Bridge"
+  }
+}

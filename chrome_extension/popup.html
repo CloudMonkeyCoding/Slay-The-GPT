@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Slay the GPT Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Slay the GPT Bridge</h1>
+      <div id="health" class="status unknown">checking...</div>
+    </header>
+
+    <section class="controls">
+      <label class="field inline">
+        Bridge URL
+        <input
+          type="text"
+          id="host-input"
+          placeholder="http://127.0.0.1:8123"
+          spellcheck="false"
+        />
+      </label>
+      <div class="buttons">
+        <button id="save-host" type="button">Save</button>
+        <button id="refresh-health" type="button">Health</button>
+        <button id="refresh-state" type="button">State</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>State Snapshot</h2>
+      <label>
+        <input type="checkbox" id="full-state" /> Request full envelope
+      </label>
+      <pre id="state-output" class="output"></pre>
+    </section>
+
+    <section>
+      <h2>Send Command</h2>
+      <form id="command-form">
+        <label class="field">
+          Command
+          <select id="command-name">
+            <option value="key">key</option>
+            <option value="click">click</option>
+            <option value="wait">wait</option>
+          </select>
+        </label>
+        <label class="field">
+          Arguments (JSON)
+          <textarea id="command-args" rows="4" placeholder='{ "key": "e" }'></textarea>
+        </label>
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Send Sequence</h2>
+      <form id="sequence-form">
+        <label class="field">
+          Steps (JSON Array)
+          <textarea id="sequence-steps" rows="4" placeholder='[ { "command": "key", "args": { "key": "e" } } ]'></textarea>
+        </label>
+        <button type="submit">Send Sequence</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Log Message</h2>
+      <form id="log-form">
+        <label class="field">
+          Message
+          <textarea id="log-message" rows="2" placeholder="Message to append to bridge log"></textarea>
+        </label>
+        <button type="submit">Send Log</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Console</h2>
+      <pre id="console-output" class="output"></pre>
+    </section>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
