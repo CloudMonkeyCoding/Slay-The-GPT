@@ -1,16 +1,16 @@
 (function () {
   const candidateFinders = [
-    () => document.querySelector("textarea[data-id]"),
-    () => document.querySelector("textarea"),
+    () => document.querySelector('textarea#prompt-textarea'),
+    () => document.querySelector('textarea[aria-label*="message"]'),
+    () => document.querySelector('textarea[data-id]'),
+    () => document.querySelector('textarea'),
     () => document.querySelector('[contenteditable="true"][data-testid="conversation-input"]'),
     () => document.querySelector('[contenteditable="true"][data-id]'),
     () => document.querySelector('[contenteditable="true"]'),
   ];
 
   function isVisible(el) {
-    if (!el) {
-      return false;
-    }
+    if (!el) return false;
     const style = window.getComputedStyle(el);
     return style && style.visibility !== "hidden" && style.display !== "none";
   }
@@ -18,23 +18,8 @@
   function findInput() {
     for (const finder of candidateFinders) {
       const candidate = finder();
-      if (candidate) {
-        console.debug("[ChatGPT Inject] Candidate input located", {
-          tag: candidate.tagName,
-          id: candidate.id,
-          classes: candidate.className,
-        });
-      }
-      if (candidate && isVisible(candidate)) {
-        console.debug("[ChatGPT Inject] Using visible input candidate", {
-          tag: candidate.tagName,
-          id: candidate.id,
-          classes: candidate.className,
-        });
-        return candidate;
-      }
+      if (candidate && isVisible(candidate)) return candidate;
     }
-    console.debug("[ChatGPT Inject] No visible input candidates found");
     return null;
   }
 
@@ -47,6 +32,25 @@
       .replace(/'/g, "&#39;");
   }
 
+  function dispatch(el, type, init) {
+    try {
+      el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
+    } catch (e) {}
+  }
+
+  function keyEvent(el, type, opts = {}) {
+    const ev = new KeyboardEvent(type, {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+      ...opts,
+    });
+    el.dispatchEvent(ev);
+  }
+
   function dispatchInputEvents(el, value) {
     try {
       el.dispatchEvent(
@@ -57,10 +61,7 @@
           cancelable: true,
         }),
       );
-    } catch (err) {
-      console.debug("[ChatGPT Inject] beforeinput dispatch failed (continuing)", err);
-    }
-
+    } catch {}
     try {
       el.dispatchEvent(
         new InputEvent("input", {
@@ -70,46 +71,44 @@
           cancelable: true,
         }),
       );
-      return;
-    } catch (err) {
-      console.debug("[ChatGPT Inject] InputEvent constructor unavailable; falling back to Event", err);
+    } catch {
+      dispatch(el, "input");
     }
-
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    dispatch(el, "change");
   }
 
   function applyValue(el, value) {
     el.focus();
 
     if ("value" in el) {
+      // textarea path
       el.value = value;
       dispatchInputEvents(el, value);
+      // Some builds only enable the send button after keyup
+      keyEvent(el, "keydown");
+      keyEvent(el, "keyup");
       return;
     }
 
+    // contenteditable path
     el.innerHTML = escapeHTML(value).replace(/\n/g, "<br>");
-    const selection = window.getSelection();
-    if (selection) {
-      selection.removeAllRanges();
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
       const range = document.createRange();
       range.selectNodeContents(el);
       range.collapse(false);
-      selection.addRange(range);
+      sel.addRange(range);
     }
     dispatchInputEvents(el, value);
+    keyEvent(el, "keydown");
+    keyEvent(el, "keyup");
   }
 
   function buttonEnabled(button) {
-    if (!button) {
-      return false;
-    }
-    if (button.disabled) {
-      return false;
-    }
+    if (!button || button.disabled) return false;
     const ariaDisabled = button.getAttribute("aria-disabled");
-    if (ariaDisabled && ariaDisabled.toLowerCase() !== "false") {
-      return false;
-    }
+    if (ariaDisabled && ariaDisabled.toLowerCase() !== "false") return false;
     const style = window.getComputedStyle(button);
     if (!style || style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") {
       return false;
@@ -118,142 +117,133 @@
   }
 
   async function waitForButtonEnabled(button, timeoutMs = 4000) {
-    if (!button) {
-      return false;
-    }
+    if (!button) return false;
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (buttonEnabled(button)) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (buttonEnabled(button)) return true;
+      await new Promise((r) => setTimeout(r, 120));
     }
     return buttonEnabled(button);
   }
 
   function clickButton(button) {
+    // Simulate a real click
     const rect = button.getBoundingClientRect();
-    const clientX = rect.left + rect.width / 2;
-    const clientY = rect.top + rect.height / 2;
-    const options = {
+    const opts = {
       bubbles: true,
       cancelable: true,
       view: window,
-      clientX,
-      clientY,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
       button: 0,
     };
-
     try {
-      button.dispatchEvent(new PointerEvent("pointerdown", options));
-      button.dispatchEvent(new MouseEvent("mousedown", options));
-    } catch (err) {
-      console.debug("[ChatGPT Inject] Pointer/mousedown dispatch failed (continuing)", err);
-    }
-
+      button.dispatchEvent(new PointerEvent("pointerdown", opts));
+    } catch {}
     try {
-      button.dispatchEvent(new PointerEvent("pointerup", options));
-      button.dispatchEvent(new MouseEvent("mouseup", options));
-    } catch (err) {
-      console.debug("[ChatGPT Inject] Pointer/mouseup dispatch failed (continuing)", err);
-    }
-
+      button.dispatchEvent(new MouseEvent("mousedown", opts));
+    } catch {}
+    try {
+      button.dispatchEvent(new PointerEvent("pointerup", opts));
+    } catch {}
+    try {
+      button.dispatchEvent(new MouseEvent("mouseup", opts));
+    } catch {}
     button.click();
   }
 
+  // 🔧 Expanded selectors to track UI changes
   function findSendButton() {
     const selectors = [
       'button[data-testid="send-button"]',
+      'button[aria-label="Send message"]',
       'button[aria-label*="Send"]',
-      'button[aria-label*="submit"]',
+      'form button[type="submit"]',
+      // Chrome supports :has now; parent button containing a Send icon
+      'button:has(svg[aria-label="Send"])',
+      'button:has(svg[aria-label*="Send"])',
     ];
-    for (const selector of selectors) {
-      const candidate = document.querySelector(selector);
-      if (candidate) {
-        console.debug("[ChatGPT Inject] Found send button candidate", {
-          selector,
-          tag: candidate.tagName,
-          classes: candidate.className,
-        });
-        return candidate;
-      }
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) return btn;
     }
-    console.debug("[ChatGPT Inject] No send button candidates found");
     return null;
   }
 
+  function nearestForm(el) {
+    return el.closest("form") || document.querySelector('form[aria-label*="input"], form');
+  }
+
+  // ✅ Fallback: press Enter in the input or submit the form
+  async function tryEnterToSend(input) {
+    try {
+      input.focus();
+      keyEvent(input, "keydown");
+      keyEvent(input, "keypress");
+      keyEvent(input, "keyup");
+      // Also try submitting the form if present
+      const form = nearestForm(input);
+      if (form) {
+        form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function dispatchPrompt(prompt) {
-    console.debug("[ChatGPT Inject] Locating message input element");
     const input = findInput();
-    if (!input) {
-      console.error("[ChatGPT Inject] Unable to locate a usable input element");
-      throw new Error("ChatGPT message box not found.");
-    }
+    if (!input) throw new Error("ChatGPT message box not found.");
+
     applyValue(input, prompt);
-    console.debug("[ChatGPT Inject] Prompt text applied; locating send button");
-    const sendButton = findSendButton();
-    if (!sendButton) {
-      console.error("[ChatGPT Inject] Unable to locate send button after applying prompt");
-      throw new Error("ChatGPT send button not found.");
+
+    let sendButton = findSendButton();
+    if (sendButton) {
+      const ok = await waitForButtonEnabled(sendButton, 4000);
+      if (ok) {
+        clickButton(sendButton);
+        return;
+      }
     }
-    if (!(await waitForButtonEnabled(sendButton))) {
-      console.error("[ChatGPT Inject] Send button remained disabled after waiting");
-      throw new Error("ChatGPT send button disabled.");
+
+    // Fallback when button not found or stays disabled
+    const sent = await tryEnterToSend(input);
+    if (sent) return;
+
+    // One last chance: look again (UI sometimes re-renders after input)
+    await new Promise((r) => setTimeout(r, 300));
+    sendButton = findSendButton();
+    if (sendButton && buttonEnabled(sendButton)) {
+      clickButton(sendButton);
+      return;
     }
-    console.debug("[ChatGPT Inject] Clicking send button");
-    clickButton(sendButton);
-    console.debug("[ChatGPT Inject] Send button click dispatched");
+
+    throw new Error("ChatGPT send button not found.");
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message && message.type === "PING") {
-      console.debug("[ChatGPT Inject] Received PING message; responding with ok");
       sendResponse({ ok: true });
       return false;
     }
+    if (!message || message.type !== "SEND_PROMPT") return false;
 
-    if (!message || message.type !== "SEND_PROMPT") {
-      return false;
-    }
-
-    console.debug("[ChatGPT Inject] Received SEND_PROMPT message", {
-      hasPrompt: typeof message.prompt === "string" && message.prompt.length > 0,
-      sender,
-    });
     const respond = (payload) => {
       try {
-        console.debug("[ChatGPT Inject] Responding to popup", payload);
         sendResponse(payload);
-      } catch (err) {
-        console.error("Failed to send response", err);
-      }
+      } catch {}
     };
 
     const ensureReady = () => {
-      if (document.readyState === "complete" || document.readyState === "interactive") {
-        console.debug("[ChatGPT Inject] Document already ready (", document.readyState, ")");
-        return Promise.resolve();
-      }
-      console.debug("[ChatGPT Inject] Waiting for DOMContentLoaded before injecting prompt.");
-      return new Promise((resolve) => {
-        document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
-      });
+      if (document.readyState === "complete" || document.readyState === "interactive") return Promise.resolve();
+      return new Promise((res) => document.addEventListener("DOMContentLoaded", () => res(), { once: true }));
     };
 
     ensureReady()
-      .then(() => {
-        console.debug("[ChatGPT Inject] Dispatching prompt to UI");
-        return dispatchPrompt(message.prompt || "");
-      })
-      .then(() => {
-        console.debug("[ChatGPT Inject] Prompt dispatched successfully");
-        respond({ ok: true });
-      })
-      .catch((error) => {
-        const messageText = error && error.message ? error.message : String(error);
-        console.error("[ChatGPT Inject] Failed to dispatch prompt", messageText);
-        respond({ ok: false, error: messageText });
-      });
+      .then(() => dispatchPrompt(message.prompt || ""))
+      .then(() => respond({ ok: true }))
+      .catch((err) => respond({ ok: false, error: err?.message || String(err) }));
 
     return true;
   });
