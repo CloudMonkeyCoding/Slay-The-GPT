@@ -191,7 +191,7 @@ def execute_step(step: Dict[str, Any]) -> None:
         _ = read_line()
         return
     if cmd == "key":
-        key = args.get("key")
+        key = args.get("key") or args.get("value")
         if not key:
             log("[execute] missing key value")
             return
@@ -224,6 +224,52 @@ def execute_step(step: Dict[str, Any]) -> None:
         # CommunicationMod expects number keys (1-based) to select cards in hand.
         send(f"key {idx + 1}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "choose":
+        index = args.get("index")
+        if index is None:
+            index = args.get("value")
+        if index is None:
+            log("[execute] choose command missing index/value")
+            return
+        try:
+            choice = int(index)
+        except (TypeError, ValueError):
+            choice = index
+        send(f"choose {choice}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "end":
+        key = args.get("key") or args.get("value") or "e"
+        send(f"key {key}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "play":
+        uuid = args.get("uuid")
+        if not uuid:
+            log("[execute] play command missing uuid")
+            return
+        state = controller.get_state(full=True)
+        if not state:
+            log("[execute] unable to fetch state for play command")
+            return
+        gs = state.get("game_state") or {}
+        idx = hand_index_for_uuid(gs, uuid)
+        if idx is None:
+            log(f"[execute] uuid {uuid} not found in hand")
+            return
+        send(f"key {idx + 1}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        target = args.get("click")
+        if isinstance(target, dict):
+            tx = target.get("x")
+            ty = target.get("y")
+            if tx is not None and ty is not None:
+                send(f"click {int(tx)} {int(ty)}")
+                wait_ms(args.get("target_pause_ms", PAUSE_MS_AFTER_CLICK))
         return
 
     log(f"[execute] unknown command '{cmd}'")
