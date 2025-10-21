@@ -2,6 +2,7 @@
 import sys, json, subprocess
 
 def send(cmd: str):
+    sys.stderr.write(f"[send] -> {cmd}\n"); sys.stderr.flush()
     sys.stdout.write(cmd + "\n")
     sys.stdout.flush()
 
@@ -88,14 +89,16 @@ while True:
     if user.strip().lower() == "q":
         break
 
+    sys.stderr.write("Requesting state from CommunicationMod...\n"); sys.stderr.flush()
     send("state")
     raw = read_one_line()
     if not raw:
-        sys.stderr.write("No data.\n"); sys.stderr.flush()
+        sys.stderr.write("No data received.\n"); sys.stderr.flush()
         continue
 
     try:
         obj = json.loads(raw)
+        sys.stderr.write("State JSON parsed successfully.\n"); sys.stderr.flush()
         gs = obj.get("game_state", {}) or {}
         st = gs.get("screen_type")
 
@@ -130,7 +133,8 @@ while True:
             }
 
         out = json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
+    except Exception as exc:
+        sys.stderr.write(f"Failed to parse JSON: {exc}\n"); sys.stderr.flush()
         out = raw
 
     # Write + clipboard (Windows)

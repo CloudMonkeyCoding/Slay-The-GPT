@@ -46,6 +46,7 @@ def log(msg: str):
 
 # --- Mod I/O: STDOUT = commands, STDIN = JSON state ---
 def send(cmd: str) -> None:
+    log(f"[send] -> {cmd}")
     sys.stdout.write(cmd + "\n")
     sys.stdout.flush()
 
@@ -61,13 +62,18 @@ def wait_ms(ms: int) -> None:
     time.sleep(ms/1000.0)
 
 def get_state() -> Dict[str, Any]:
+    log("Requesting game state from CommunicationMod...")
     send("state")
     raw = read_line()
     if not raw:
+        log("[state] No response received.")
         return {}
     try:
-        return json.loads(raw)
-    except Exception:
+        data = json.loads(raw)
+        log("[state] JSON parsed successfully.")
+        return data
+    except Exception as exc:
+        log(f"[state] Failed to parse JSON: {exc}")
         return {}
 
 # --- Snapshot trimming (combat = full minus map; else screen-relevant) ---
@@ -185,6 +191,8 @@ def execute_step(step: Dict[str, Any]) -> None:
     cmd = (step.get("command") or "").lower()
     args = step.get("args") or {}
 
+    log(f"Executing step: command={cmd}, args={args}")
+
     if cmd == "wait":
         wait_ms(int(args.get("ms", 100))); return
     if cmd == "state":
@@ -208,7 +216,9 @@ def execute_step(step: Dict[str, Any]) -> None:
         s = get_state()
         gs = s.get("game_state", s)
         idx = hand_index_for_uuid(gs, uuid)
-        if idx is None: return
+        if idx is None:
+            log(f"[play] Card with UUID {uuid} not found in hand.")
+            return
         send(f"key {idx+1}")
         wait_ms(PAUSE_MS_AFTER_KEY)
         targ = args.get("click")
@@ -272,6 +282,8 @@ def plan_with_gpt(state_envelope: dict) -> list[dict]:
     payload = make_trimmed_snapshot(state_envelope) if SEND_TRIMMED_TO_GPT else state_envelope
     state_str = json.dumps(payload, separators=(",", ":"))
 
+    log(f"Planning with GPT. Trimmed={SEND_TRIMMED_TO_GPT}, payload_bytes={len(state_str)}")
+
     # Messages used by both APIs
     system_msg = SYSTEM_INSTRUCTIONS
     user_msg = (
@@ -282,6 +294,7 @@ def plan_with_gpt(state_envelope: dict) -> list[dict]:
 
     # 1) Try Responses API with JSON Schema (new SDKs)
     try:
+        log("Calling OpenAI Responses API with JSON schema.")
         resp = client.responses.create(
             model=OPENAI_MODEL,
             response_format={"type": "json_schema", "json_schema": ACTION_SCHEMA},
@@ -294,6 +307,7 @@ def plan_with_gpt(state_envelope: dict) -> list[dict]:
         # Prefer parsed structured output if present
         try:
             parsed = resp.output[0].content[0].parsed  # new SDK field
+            log("Received parsed response from Responses API.")
             return parsed.get("sequence", [])
         except Exception:
             pass
@@ -302,16 +316,19 @@ def plan_with_gpt(state_envelope: dict) -> list[dict]:
             text = resp.output_text
         except Exception:
             text = resp.output[0].content[0].text
+        log("Responses API returned text; attempting to parse JSON.")
         data = json.loads(text)
         return data.get("sequence", [])
     except TypeError:
         # Your SDK likely doesn't support response_format on Responses API
+        log("Responses API TypeError: response_format unsupported, falling back to Chat Completions.")
         pass
     except Exception as e:
-        sys.stderr.write(f"OpenAI (responses) error: {e}\n"); sys.stderr.flush()
+        log(f"OpenAI (responses) error: {e}")
 
     # 2) Fallback: Chat Completions JSON mode (works on older SDKs)
     try:
+        log("Calling OpenAI Chat Completions API in JSON mode.")
         chat = client.chat.completions.create(
             model=OPENAI_MODEL,  # if this model isn't available for chat, try "gpt-4o-mini"
             response_format={"type": "json_object"},
@@ -323,18 +340,22 @@ def plan_with_gpt(state_envelope: dict) -> list[dict]:
             max_tokens=800,
         )
         content = chat.choices[0].message.content
+        log("Chat Completions returned content; parsing JSON.")
         data = json.loads(content)
         seq = data.get("sequence", [])
         if not isinstance(seq, list):
+            log("Chat response did not contain a list sequence.")
             return []
         # Optional: minimal schema check
         good = []
         for step in seq:
             if isinstance(step, dict) and "command" in step and "args" in step:
                 good.append(step)
+            else:
+                log(f"Dropping invalid step from chat response: {step}")
         return good
     except Exception as e:
-        sys.stderr.write(f"OpenAI (chat) error: {e}\n"); sys.stderr.flush()
+        log(f"OpenAI (chat) error: {e}")
         return []
 
 # --- Button actions (run in worker threads so the UI doesn't freeze) ---
@@ -342,7 +363,7 @@ def do_snapshot():
     def work():
         state = get_state()
         if not state:
-            log("No state received."); return
+            log("No state received during snapshot request."); return
         trimmed = make_trimmed_snapshot(state)
         out = json.dumps(trimmed, ensure_ascii=False, separators=(",", ":"))
         try:
@@ -351,16 +372,16 @@ def do_snapshot():
         except Exception as e:
             log(f"Write error: {e}")
         if copy_to_clipboard(out):
-            log("Snapshot saved & copied.")
+            log("Snapshot saved & copied to clipboard.")
         else:
-            log("Snapshot saved (clipboard unavailable).")
+            log("Snapshot saved locally; clipboard unavailable.")
     threading.Thread(target=work, daemon=True).start()
 
 def do_plan_only():
     def work():
         state = get_state()
         if not state:
-            log("No state received."); return
+            log("No state received for planning."); return
         seq = plan_with_gpt(state)
         try:
             txt = json.dumps({"sequence":seq}, ensure_ascii=False, separators=(",", ":"))
@@ -374,7 +395,7 @@ def do_plan_and_execute():
     def work():
         state = get_state()
         if not state:
-            log("No state received."); return
+            log("No state received before plan+execute."); return
         seq = plan_with_gpt(state)
         if not isinstance(seq, list) or not seq:
             log("Model returned no sequence."); return
@@ -383,6 +404,7 @@ def do_plan_and_execute():
                 execute_step(step)
             except Exception as ex:
                 log(f"Step error {step}: {ex}")
+        log("Finished executing planned sequence.")
         log("Sequence executed.")
     threading.Thread(target=work, daemon=True).start()
 
