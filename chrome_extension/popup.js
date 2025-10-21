@@ -295,20 +295,47 @@ function buildPlannerPrompt(payload) {
   ].join("\n");
 }
 
+function isChatGPTUrl(url) {
+  return /^https:\/\/chatgpt\.com(?:\/|$)/.test(url || "");
+}
+
+function describeTabUrl(tab) {
+  if (!tab) {
+    return "unknown";
+  }
+  return tab.url || tab.pendingUrl || "unknown";
+}
+
 async function ensureChatGPTTab() {
   if (typeof chrome === "undefined" || !chrome.tabs || !chrome.tabs.query) {
     throw new Error("Chrome tabs API unavailable in this context.");
   }
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const activeTab = tabs && tabs[0];
-  if (!activeTab) {
-    throw new Error("No active tab found. Open chatgpt.com first.");
+
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (activeTab && (isChatGPTUrl(activeTab.url) || isChatGPTUrl(activeTab.pendingUrl))) {
+    return activeTab;
   }
-  const url = activeTab.url || "";
-  if (!/^https:\/\/chatgpt\.com(?:\/|$)/.test(url)) {
-    throw new Error("Active tab must be chatgpt.com before sending the prompt.");
+
+  const candidates = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  if (candidates && candidates.length > 0) {
+    candidates.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+    const recent = candidates[0];
+    if (recent) {
+      if (recent.id !== (activeTab && activeTab.id)) {
+        log(
+          `Using chatgpt.com tab that isn't currently focused (URL: ${describeTabUrl(recent)}). ` +
+            "If sending fails, click that tab and retry.",
+          "warning",
+        );
+      }
+      return recent;
+    }
   }
-  return activeTab;
+
+  const details = activeTab
+    ? `Active tab URL detected: ${describeTabUrl(activeTab)}`
+    : "No active tab detected.";
+  throw new Error(`Could not find a chatgpt.com tab. ${details}`);
 }
 
 async function sendPromptToChatGPT(prompt) {
