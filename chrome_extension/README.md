@@ -55,12 +55,15 @@ browser tab, so no API key or model selection is required.
   the cached full envelope before composing the message. The generated prompt is
   shown in the "Last Prompt" panel and automatically submitted in the active
   ChatGPT tab. The extension waits for ChatGPT to finish responding, populates
-  the "Send Sequence" form with the returned JSON, and when using **Plan +
-  Execute** it immediately forwards the sequence to CommunicationMod.
+  the "Send Sequence" form with the returned `PLAY CardIndex [TargetIndex]`
+  command list, and when using **Plan + Execute** it immediately forwards the
+  resulting actions to CommunicationMod.
 - When a card produces a hand-select prompt (for example, Burning Pact asking
   you to exhaust a card), the extension automatically refreshes the state after
   the sequence finishes. If the game is waiting for a choice, it will request a
   follow-up command from ChatGPT (up to a few attempts) or remind you to run
   Plan + Execute again so the exhaust target can be chosen.
 - The manual command/sequence/log forms remain available below if you need to
-  issue ad-hoc actions outside the automated workflow.
+  issue ad-hoc actions outside the automated workflow. The sequence textarea
+  accepts plain-text commands (for example, `PLAY 2 1` or `END`) and still
+  understands the older JSON array/object format if you prefer it.

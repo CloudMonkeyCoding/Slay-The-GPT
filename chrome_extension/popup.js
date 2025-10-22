@@ -7,68 +7,16 @@ const STORAGE_DEFAULTS = {
 const SYSTEM_INSTRUCTIONS = `You are an expert Slay the Spire planner that outputs an action SEQUENCE.
 Reference: https://github.com/ForgottenArbiter/CommunicationMod (all commands below come from this protocol).
 Rules:
-- Return ONLY JSON that matches the provided schema (no prose, markdown, or comments).
-- Prefer CommunicationMod-native commands: play, end, wait, key, choose, state. Use click ONLY when no command-based option exists.
-- Command usage:
-  - play: args.uuid identifies the card to play. Add targeting via args.target_index (1-based front-to-back), args.target_uuid, or args.monster/name fields.
-  - end: ends the player turn. No args beyond an empty object.
-  - wait: args.ms is a delay in milliseconds to let animations resolve (default to 250 if unsure).
-  - key: args.value is the literal key label to press (e.g., "SPACE", "ESCAPE", "1").
-  - choose: args.index selects a 1-based menu/reward option. Use when a prompt requests a choice.
-  - state: request the latest game state when more context is required.
-  - click (last resort): only use if the protocol lacks a matching command. Supply args.click with x/y coordinates.
-- Issue play steps with args.uuid for the card to play and omit click targeting when a monster identifier is available.
-- When a play requires a target, provide target_index (1-based), target_uuid, monster, or enemy descriptors in args. Do NOT add click coordinates for targeting.
-- Indices are 1-based unless otherwise stated; the frontmost enemy is target_index 1.
-- Use choose with an index when selecting from menus or rewards instead of click.
-- Keep sequences short (<=5 steps). If no legal action is available, return {"sequence":[]} to request more information.`;
-
-const ACTION_SCHEMA = {
-  name: "ActionSequence",
-  schema: {
-    type: "object",
-    properties: {
-      sequence: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            command: {
-              type: "string",
-              enum: ["key", "click", "choose", "wait", "state", "play", "end"],
-            },
-            args: {
-              type: "object",
-              properties: {
-                value: { type: "string" },
-                index: { type: "integer" },
-                ms: { type: "integer", minimum: 0 },
-                x: { type: "integer" },
-                y: { type: "integer" },
-                uuid: { type: "string" },
-                click: {
-                  type: "object",
-                  properties: {
-                    x: { type: "integer" },
-                    y: { type: "integer" },
-                  },
-                  required: ["x", "y"],
-                  additionalProperties: false,
-                },
-              },
-              additionalProperties: true,
-            },
-          },
-          required: ["command", "args"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["sequence"],
-    additionalProperties: false,
-  },
-  strict: true,
-};
+- Return ONLY plain-text commands, one per line. Do not include JSON, prose, or commentary.
+- Command syntax (1-based indices):
+  - PLAY <CardIndex> [TargetIndex] — play a card from the hand, optionally targeting the specified monster.
+  - END — end the player's turn.
+  - WAIT [Milliseconds] — pause to allow animations (defaults to 250ms if omitted).
+  - CHOOSE <OptionIndex> — pick a menu or reward option.
+  - STATE — request the latest state if more context is required.
+  - KEY <Value> — press a CommunicationMod key literal (e.g., END_TURN, SPACE, 1).
+- Avoid CLICK commands; target monsters with indices instead of coordinates.
+- Keep sequences short (<=5 steps). If no legal action is available, output an empty sequence by returning no commands.`;
 
 const HAND_SELECT_FOLLOWUP_LIMIT = 3;
 const HAND_SELECT_STATE_DELAY_MS = 250;
@@ -383,7 +331,160 @@ async function maybeHandlePendingHandSelect({ origin }) {
   }
 }
 
-function extractJSONObjectString(text) {
+const PLAIN_COMMAND_KEYWORDS = new Set(["PLAY", "END", "WAIT", "CHOOSE", "STATE", "KEY"]);
+const TARGET_HINT_WORDS = new Set(["TARGET", "ENEMY", "MONSTER"]);
+
+function extractCommandSegments(text) {
+  if (!text) {
+    return [];
+  }
+  const segments = [];
+  const fenceRegex = /```(?:[\w-]+)?\s*([\s\S]*?)```/g;
+  let match;
+  while ((match = fenceRegex.exec(text))) {
+    const block = (match[1] || "").trim();
+    if (block) {
+      segments.push(block);
+    }
+  }
+  if (!segments.length) {
+    const trimmed = text.trim();
+    if (trimmed) {
+      segments.push(trimmed);
+    }
+  }
+  return segments;
+}
+
+function parsePositiveInteger(token, description) {
+  const normalized = String(token ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`${description} must be a positive integer (received '${token}')`);
+  }
+  const value = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error(`${description} must be >= 1 (received '${token}')`);
+  }
+  return value;
+}
+
+function parseNonNegativeInteger(token, description) {
+  const normalized = String(token ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`${description} must be a non-negative integer (received '${token}')`);
+  }
+  const value = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${description} must be >= 0 (received '${token}')`);
+  }
+  return value;
+}
+
+function parsePlainCommandSegment(segment) {
+  const lines = segment.split(/\r?\n/);
+  const steps = [];
+  const rendered = [];
+  for (const rawLine of lines) {
+    let trimmed = rawLine.trim();
+    if (!trimmed) {
+      continue;
+    }
+    trimmed = trimmed.replace(/^[\-\*\u2022]\s+/, "");
+    trimmed = trimmed.replace(/^\d+\s*[\.\)\:-]\s*/, "");
+    if (!trimmed) {
+      continue;
+    }
+    const parts = trimmed.split(/\s+/);
+    if (!parts.length) {
+      continue;
+    }
+    let commandToken = parts.shift();
+    if (!commandToken) {
+      continue;
+    }
+    if (commandToken.endsWith(":")) {
+      commandToken = commandToken.slice(0, -1);
+    }
+    const command = commandToken.toUpperCase();
+    if (!PLAIN_COMMAND_KEYWORDS.has(command)) {
+      continue;
+    }
+    const rest = parts;
+    let step = null;
+    let renderedLine = command;
+    if (command === "PLAY") {
+      if (!rest.length) {
+        throw new Error(`PLAY command missing card index (line: "${rawLine.trim()}")`);
+      }
+      const cardIndex = parsePositiveInteger(rest[0], "Card index");
+      step = { command: "play", args: { index: cardIndex } };
+      renderedLine = `${command} ${cardIndex}`;
+      let targetToken = null;
+      if (rest.length >= 2) {
+        if (/^\d+$/.test(rest[1])) {
+          targetToken = rest[1];
+        } else if (TARGET_HINT_WORDS.has(rest[1].toUpperCase()) && rest.length >= 3 && /^\d+$/.test(rest[2])) {
+          targetToken = rest[2];
+        }
+      }
+      if (targetToken !== null) {
+        const targetIndex = parsePositiveInteger(targetToken, "Target index");
+        step.args.target_index = targetIndex;
+        renderedLine = `${renderedLine} ${targetIndex}`;
+      }
+    } else if (command === "END") {
+      step = { command: "end", args: {} };
+    } else if (command === "WAIT") {
+      let ms = 250;
+      if (rest.length) {
+        ms = parseNonNegativeInteger(rest[0], "Wait duration");
+      }
+      step = { command: "wait", args: { ms } };
+      renderedLine = `${command} ${ms}`;
+    } else if (command === "CHOOSE") {
+      if (!rest.length) {
+        throw new Error(`CHOOSE command missing option index (line: "${rawLine.trim()}")`);
+      }
+      const optionIndex = parsePositiveInteger(rest[0], "Option index");
+      step = { command: "choose", args: { index: optionIndex } };
+      renderedLine = `${command} ${optionIndex}`;
+    } else if (command === "STATE") {
+      step = { command: "state", args: {} };
+    } else if (command === "KEY") {
+      if (!rest.length) {
+        throw new Error(`KEY command missing value (line: "${rawLine.trim()}")`);
+      }
+      const keyValue = rest.join(" ").trim();
+      step = { command: "key", args: { value: keyValue } };
+      renderedLine = `${command} ${keyValue.toUpperCase()}`;
+    }
+    if (step) {
+      steps.push(step);
+      rendered.push(renderedLine);
+    }
+  }
+  if (!steps.length) {
+    return null;
+  }
+  return { steps, representation: rendered.join("\n") };
+}
+
+function parsePlainCommandSequence(text) {
+  const segments = extractCommandSegments(text);
+  for (const segment of segments) {
+    try {
+      const parsed = parsePlainCommandSegment(segment);
+      if (parsed) {
+        return parsed;
+      }
+    } catch (err) {
+      throw err;
+    }
+  }
+  return null;
+}
+
+function extractJSONSnippet(text) {
   if (!text) {
     return null;
   }
@@ -395,27 +496,38 @@ function extractJSONObjectString(text) {
   if (fence && fence[1]) {
     return fence[1].trim();
   }
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
     return trimmed;
   }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
+  const firstBrace = trimmed.search(/[\[{]/);
+  const lastBraceObject = trimmed.lastIndexOf("}");
+  const lastBraceArray = trimmed.lastIndexOf("]");
+  const lastBrace = Math.max(lastBraceObject, lastBraceArray);
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
     return trimmed.slice(firstBrace, lastBrace + 1).trim();
   }
   return null;
 }
 
-function parseChatGPTSequence(text) {
-  const candidate = extractJSONObjectString(text);
+function parseSequenceText(text) {
+  const plain = parsePlainCommandSequence(text);
+  if (plain) {
+    return { ...plain, format: "plain" };
+  }
+  const candidate = extractJSONSnippet(text);
   if (!candidate) {
-    throw new Error("Could not locate a JSON object in ChatGPT's response.");
+    throw new Error(
+      "Could not locate a command list. Provide plain-text commands (e.g., PLAY 1) or a JSON sequence payload.",
+    );
   }
   let payload;
   try {
     payload = JSON.parse(candidate);
   } catch (err) {
-    throw new Error(`ChatGPT response JSON parse failed: ${err.message}`);
+    throw new Error(`Response JSON parse failed: ${err.message}`);
   }
   let steps = null;
   if (Array.isArray(payload)) {
@@ -428,9 +540,9 @@ function parseChatGPTSequence(text) {
     }
   }
   if (!Array.isArray(steps)) {
-    throw new Error("ChatGPT response is missing a 'sequence' array.");
+    throw new Error("Response JSON is missing a 'sequence' or 'steps' array.");
   }
-  return { steps, rawJSON: candidate, payload };
+  return { steps, representation: candidate, format: "json", payload };
 }
 
 async function refreshHealth() {
@@ -548,18 +660,14 @@ async function snapshotAction() {
 }
 
 function buildPlannerPrompt(payload) {
-  const schemaText = JSON.stringify(ACTION_SCHEMA.schema, null, 2);
   const stateJSON = JSON.stringify(payload, null, 2);
   return [
     SYSTEM_INSTRUCTIONS,
     "",
-    "Action schema (JSON Schema):",
-    schemaText,
-    "",
     "Current run state JSON:",
     stateJSON,
     "",
-    "Return only the sequence object that matches the schema.",
+    "Return only the plain-text command list described above.",
   ].join("\n");
 }
 
@@ -828,7 +936,7 @@ async function handleChatGPTReply(responseText, { execute }) {
 
   let parsed;
   try {
-    parsed = parseChatGPTSequence(lastChatGPTResponseText);
+    parsed = parseSequenceText(lastChatGPTResponseText);
   } catch (err) {
     log(`Failed to parse ChatGPT response: ${err.message}`, "error");
     log("Copy the sequence directly from ChatGPT and send it via the form if needed.", "info");
@@ -836,12 +944,17 @@ async function handleChatGPTReply(responseText, { execute }) {
   }
 
   const steps = parsed.steps;
-  const preview = parsed.rawJSON.length > 140 ? `${parsed.rawJSON.slice(0, 140)}…` : parsed.rawJSON;
-  log(`ChatGPT sequence JSON captured: ${preview}`, "debug");
+  const representation = parsed.representation || "";
+  const preview = representation.length > 140 ? `${representation.slice(0, 140)}…` : representation;
+  log(`ChatGPT sequence (${parsed.format}) captured: ${preview}`, "debug");
 
   const field = document.getElementById("sequence-steps");
   if (field) {
-    field.value = JSON.stringify(steps, null, 2);
+    if (parsed.format === "plain") {
+      field.value = representation;
+    } else {
+      field.value = JSON.stringify(steps, null, 2);
+    }
   }
 
   log(`Captured ChatGPT sequence with ${steps.length} step(s).`, "success");
@@ -964,27 +1077,15 @@ async function postSequenceSteps(steps, { origin = "manual" } = {}) {
 async function sendSequence(event) {
   event.preventDefault();
   const field = document.getElementById("sequence-steps");
-  let parsed = [];
-  let steps = [];
+  let parsed;
   try {
-    parsed = parseJSONField(field.value, []);
-    if (Array.isArray(parsed)) {
-      steps = parsed;
-    } else if (parsed && typeof parsed === "object") {
-      if (Array.isArray(parsed.sequence)) {
-        steps = parsed.sequence;
-      } else if (Array.isArray(parsed.steps)) {
-        steps = parsed.steps;
-      }
-    }
-    if (!Array.isArray(steps)) {
-      throw new Error("Sequence must be a JSON array or an object with a sequence/steps array");
-    }
+    parsed = parseSequenceText(field.value);
   } catch (err) {
     log(err.message, "error");
     field.focus();
     return;
   }
+  const steps = parsed.steps;
   try {
     await postSequenceSteps(steps, { origin: "manual" });
   } catch (err) {
