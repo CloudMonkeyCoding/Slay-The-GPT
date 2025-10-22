@@ -406,10 +406,20 @@ function parseChatGPTSequence(text) {
   } catch (err) {
     throw new Error(`ChatGPT response JSON parse failed: ${err.message}`);
   }
-  if (!payload || typeof payload !== "object" || !Array.isArray(payload.sequence)) {
+  let steps = null;
+  if (Array.isArray(payload)) {
+    steps = payload;
+  } else if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.sequence)) {
+      steps = payload.sequence;
+    } else if (Array.isArray(payload.steps)) {
+      steps = payload.steps;
+    }
+  }
+  if (!Array.isArray(steps)) {
     throw new Error("ChatGPT response is missing a 'sequence' array.");
   }
-  return { steps: payload.sequence, rawJSON: candidate, payload };
+  return { steps, rawJSON: candidate, payload };
 }
 
 async function refreshHealth() {
@@ -943,11 +953,21 @@ async function postSequenceSteps(steps, { origin = "manual" } = {}) {
 async function sendSequence(event) {
   event.preventDefault();
   const field = document.getElementById("sequence-steps");
+  let parsed = [];
   let steps = [];
   try {
-    steps = parseJSONField(field.value, []);
+    parsed = parseJSONField(field.value, []);
+    if (Array.isArray(parsed)) {
+      steps = parsed;
+    } else if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed.sequence)) {
+        steps = parsed.sequence;
+      } else if (Array.isArray(parsed.steps)) {
+        steps = parsed.steps;
+      }
+    }
     if (!Array.isArray(steps)) {
-      throw new Error("Sequence must be a JSON array");
+      throw new Error("Sequence must be a JSON array or an object with a sequence/steps array");
     }
   } catch (err) {
     log(err.message, "error");
