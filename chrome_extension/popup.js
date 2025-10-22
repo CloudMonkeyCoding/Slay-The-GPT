@@ -59,12 +59,17 @@ const ACTION_SCHEMA = {
   strict: true,
 };
 
+const HAND_SELECT_FOLLOWUP_LIMIT = 3;
+const HAND_SELECT_STATE_DELAY_MS = 250;
+
 let settings = { ...STORAGE_DEFAULTS };
 let lastTrimmedState = null;
 let lastFullState = null;
 let lastStateJSON = "";
 let lastPromptText = "";
 let lastChatGPTResponseText = "";
+let handSelectFollowupAttempts = 0;
+let handSelectFollowupPending = false;
 
 function storageAvailable() {
   return typeof chrome !== "undefined" && !!(chrome.storage && chrome.storage.local);
@@ -217,6 +222,154 @@ function setPromptDisplay(prompt) {
   }
   lastPromptText = prompt;
   output.textContent = lastPromptText;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function upper(text) {
+  if (text === null || text === undefined) {
+    return "";
+  }
+  return String(text).trim().toUpperCase();
+}
+
+function parseMaybeNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function cardLabelFromObject(card) {
+  if (!card || typeof card !== "object") {
+    return null;
+  }
+  const nameKeys = ["name", "card_name", "cardName", "label", "display", "id", "card_id", "cardId"];
+  for (const key of nameKeys) {
+    if (key in card && card[key]) {
+      const text = String(card[key]).trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  if ("uuid" in card && card.uuid) {
+    return String(card.uuid).trim();
+  }
+  return null;
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    const canonical = value.toLowerCase();
+    if (seen.has(canonical)) {
+      continue;
+    }
+    seen.add(canonical);
+    result.push(value);
+  }
+  return result;
+}
+
+function analyzeHandSelectState(envelope) {
+  if (!envelope || typeof envelope !== "object") {
+    return null;
+  }
+  const gameState = envelope.game_state && typeof envelope.game_state === "object" ? envelope.game_state : {};
+  const screenTypeRaw = gameState.screen_type || envelope.screen_type || "";
+  if (upper(screenTypeRaw) !== "HAND_SELECT") {
+    return null;
+  }
+  const screenState = gameState.screen_state && typeof gameState.screen_state === "object" ? gameState.screen_state : {};
+  const choiceList = Array.isArray(gameState.choice_list) ? gameState.choice_list : [];
+  const handCards = Array.isArray(screenState.hand) ? screenState.hand : [];
+  const selectedCards = Array.isArray(screenState.selected) ? screenState.selected : [];
+  const maxCards =
+    parseMaybeNumber(screenState.max_cards ?? screenState.maxCards ?? screenState.num_cards ?? screenState.numCards);
+  const remaining = typeof maxCards === "number" ? Math.max(0, maxCards - selectedCards.length) : null;
+  const canPickZero = Boolean(screenState.can_pick_zero ?? screenState.canPickZero);
+  const needsChoice = remaining === null ? choiceList.length > 0 : remaining > 0;
+  if (!needsChoice) {
+    return null;
+  }
+  return {
+    remaining: remaining === null ? 1 : remaining,
+    canPickZero,
+    choiceList,
+    handCards,
+  };
+}
+
+async function maybeHandlePendingHandSelect({ origin }) {
+  try {
+    await wait(HAND_SELECT_STATE_DELAY_MS);
+  } catch (err) {
+    console.error(err);
+  }
+
+  let trimmedState;
+  try {
+    const { trimmed } = await refreshState({ silent: true });
+    trimmedState = trimmed;
+  } catch (err) {
+    log(`Follow-up state refresh failed: ${err.message}`, "debug");
+    return;
+  }
+
+  const context = analyzeHandSelectState(trimmedState);
+  if (!context) {
+    if (handSelectFollowupAttempts > 0 || handSelectFollowupPending) {
+      log("Hand select follow-up cleared; ready for next command.", "debug");
+    }
+    handSelectFollowupAttempts = 0;
+    handSelectFollowupPending = false;
+    return;
+  }
+
+  const optionNames = uniqueStrings([
+    ...context.choiceList.map((item) => (typeof item === "string" ? item.trim() : "")),
+    ...context.handCards.map((card) => cardLabelFromObject(card)).filter(Boolean),
+  ]);
+  if (optionNames.length) {
+    const preview = optionNames.slice(0, 8).join(", ");
+    log(`Pending hand selection options: ${preview}`, "debug");
+  }
+
+  const remainingText = context.remaining > 1 ? `${context.remaining} cards` : "1 card";
+  const extraNote = context.canPickZero ? " (skipping may also be allowed)" : "";
+  log(`Card selection detected: choose ${remainingText} to continue${extraNote}.`, "warning");
+
+  if (origin === "auto") {
+    if (handSelectFollowupAttempts >= HAND_SELECT_FOLLOWUP_LIMIT) {
+      log(
+        `Reached the automatic follow-up limit (${HAND_SELECT_FOLLOWUP_LIMIT}). Review the state and send a choose command manually.`,
+        "warning",
+      );
+      handSelectFollowupPending = false;
+      return;
+    }
+    handSelectFollowupAttempts += 1;
+    handSelectFollowupPending = true;
+    log(`Requesting follow-up command from ChatGPT to resolve the hand selection (attempt ${handSelectFollowupAttempts}).`, "info");
+    try {
+      await planAction({ execute: true });
+    } catch (err) {
+      log(`Hand select follow-up planning failed: ${err.message}`, "error");
+    } finally {
+      handSelectFollowupPending = false;
+    }
+  } else {
+    log("Run Plan + Execute or send a choose command manually to finish the selection.", "info");
+    handSelectFollowupPending = false;
+  }
 }
 
 function extractJSONObjectString(text) {
@@ -779,6 +932,11 @@ async function postSequenceSteps(steps, { origin = "manual" } = {}) {
     body: JSON.stringify({ steps }),
   });
   log(`${label} sent: ${JSON.stringify(resp)}`, "success");
+  try {
+    await maybeHandlePendingHandSelect({ origin });
+  } catch (err) {
+    log(`Follow-up handling failed: ${err.message}`, "debug");
+  }
   return resp;
 }
 

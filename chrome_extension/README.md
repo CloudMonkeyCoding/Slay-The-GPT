@@ -57,5 +57,10 @@ browser tab, so no API key or model selection is required.
   ChatGPT tab. The extension waits for ChatGPT to finish responding, populates
   the "Send Sequence" form with the returned JSON, and when using **Plan +
   Execute** it immediately forwards the sequence to CommunicationMod.
+- When a card produces a hand-select prompt (for example, Burning Pact asking
+  you to exhaust a card), the extension automatically refreshes the state after
+  the sequence finishes. If the game is waiting for a choice, it will request a
+  follow-up command from ChatGPT (up to a few attempts) or remind you to run
+  Plan + Execute again so the exhaust target can be chosen.
 - The manual command/sequence/log forms remain available below if you need to
   issue ad-hoc actions outside the automated workflow.
