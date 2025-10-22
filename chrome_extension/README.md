@@ -67,3 +67,7 @@ browser tab, so no API key or model selection is required.
   issue ad-hoc actions outside the automated workflow. The sequence textarea
   accepts plain-text commands (for example, `PLAY 2 1` or `END`) and still
   understands the older JSON array/object format if you prefer it.
+- The built-in planner instructions explicitly encourage playing every
+  beneficial card before ending the turn, so most generated plans will exhaust
+  playable options prior to issuing `END` unless holding a card is strategically
+  necessary.
