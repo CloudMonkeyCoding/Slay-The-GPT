@@ -236,6 +236,89 @@ def hand_index_for_uuid(gs: Dict[str, Any], uuid: str) -> Optional[int]:
     return None
 
 
+def parse_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_card_index(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        idx = int(value)
+    else:
+        text = str(value).strip().upper()
+        if not text:
+            return None
+        if text.startswith("CARD_"):
+            text = text[5:]
+        try:
+            idx = int(float(text))
+        except (TypeError, ValueError):
+            return None
+    if idx == 0:
+        idx = 10
+    if idx < 1 or idx > 10:
+        return None
+    return idx
+
+
+def resolve_card_index(args: Dict[str, Any]) -> int:
+    uuid = args.get("uuid") or args.get("card_uuid")
+    for key in ("index", "value", "card", "slot", "hand_index"):
+        idx = parse_card_index(args.get(key))
+        if idx is not None:
+            return idx
+    if uuid:
+        state = controller.get_state(full=True, refresh=False)
+        if state is None:
+            state = controller.get_state(full=True, refresh=True)
+        if state:
+            gs = state.get("game_state") or {}
+            found = hand_index_for_uuid(gs, uuid)
+            if found is not None:
+                return found + 1
+    raise ValueError("Card index could not be resolved from args")
+
+
+def resolve_monster_index(args: Dict[str, Any]) -> Optional[int]:
+    for key in ("monster_index", "target_index", "target", "monster"):
+        idx = parse_int(args.get(key))
+        if idx is not None:
+            return idx
+    return None
+
+
+def parse_click_args(value: Any) -> Tuple[float, float, str]:
+    if not isinstance(value, dict):
+        raise ValueError("Click args must be an object with x/y")
+    if "x" not in value or "y" not in value:
+        raise ValueError("Click args missing x/y coordinates")
+    try:
+        fx = float(value.get("x"))
+        fy = float(value.get("y"))
+    except (TypeError, ValueError):
+        raise ValueError("Click coordinates must be numbers")
+    button = normalize_click_button(value.get("button"))
+    return fx, fy, button
+
+
 def execute_step(step: Dict[str, Any]) -> None:
     cmd = (step.get("command") or "").lower()
     args = step.get("args") or {}
@@ -243,7 +326,11 @@ def execute_step(step: Dict[str, Any]) -> None:
     log(f"Executing step: command={cmd}, args={args}")
 
     if cmd == "wait":
-        ms = int(args.get("ms", 100))
+        ms_value = args.get("ms", 100)
+        try:
+            ms = int(ms_value)
+        except (TypeError, ValueError):
+            raise ValueError("wait command requires numeric 'ms'")
         send(f"wait {ms}")
         wait_ms(ms)
         return
@@ -255,8 +342,7 @@ def execute_step(step: Dict[str, Any]) -> None:
         raw_key = args.get("key") or args.get("value")
         key = normalize_key_name(raw_key)
         if not key:
-            log("[execute] missing key value")
-            return
+            raise ValueError("key command missing key/value")
         send(f"key {key}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
@@ -264,37 +350,21 @@ def execute_step(step: Dict[str, Any]) -> None:
         x = args.get("x")
         y = args.get("y")
         if x is None or y is None:
-            log("[execute] click missing coordinates")
-            return
+            raise ValueError("click command missing x/y coordinates")
         button = normalize_click_button(args.get("button") or args.get("value"))
         try:
             fx = float(x)
             fy = float(y)
         except (TypeError, ValueError):
-            log("[execute] click coordinates must be numbers")
-            return
+            raise ValueError("click coordinates must be numbers")
         send(f"click {button} {fx} {fy}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_CLICK))
         return
     if cmd == "card":
-        uuid = args.get("uuid")
-        if not uuid:
-            log("[execute] card command missing uuid")
-            return
-        state = controller.get_state(full=True)
-        if not state:
-            log("[execute] unable to fetch state for card command")
-            return
-        gs = state.get("game_state") or {}
-        idx = hand_index_for_uuid(gs, uuid)
-        if idx is None:
-            log(f"[execute] uuid {uuid} not found in hand")
-            return
-        # CommunicationMod expects number keys (1-based) to select cards in hand.
-        key_name = normalize_key_name(str(idx + 1))
+        idx = resolve_card_index(args)
+        key_name = normalize_key_name(str(idx))
         if not key_name:
-            log(f"[execute] unable to map card index {idx + 1} to key")
-            return
+            raise ValueError(f"unable to map card index {idx} to key")
         send(f"key {key_name}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
@@ -304,8 +374,7 @@ def execute_step(step: Dict[str, Any]) -> None:
         if index is None:
             index = args.get("value")
         if index is None:
-            log("[execute] choose command missing index/value")
-            return
+            raise ValueError("choose command missing index/value")
         try:
             choice = int(index)
         except (TypeError, ValueError):
@@ -318,46 +387,26 @@ def execute_step(step: Dict[str, Any]) -> None:
         raw_key = args.get("key") or args.get("value") or "END_TURN"
         key = normalize_key_name(raw_key)
         if not key:
-            log("[execute] end command missing key mapping")
-            return
+            raise ValueError("end command missing key mapping")
         send(f"key {key}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
 
     if cmd == "play":
-        uuid = args.get("uuid")
-        if not uuid:
-            log("[execute] play command missing uuid")
-            return
-        state = controller.get_state(full=True)
-        if not state:
-            log("[execute] unable to fetch state for play command")
-            return
-        gs = state.get("game_state") or {}
-        idx = hand_index_for_uuid(gs, uuid)
-        if idx is None:
-            log(f"[execute] uuid {uuid} not found in hand")
-            return
-        key_name = normalize_key_name(str(idx + 1))
-        if not key_name:
-            log(f"[execute] unable to map card index {idx + 1} to key")
-            return
-        send(f"key {key_name}")
+        idx = resolve_card_index(args)
+        monster_idx = resolve_monster_index(args)
+        if monster_idx is not None:
+            send(f"play {idx} {monster_idx}")
+        else:
+            send(f"play {idx}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         target = args.get("click")
-        if isinstance(target, dict):
-            tx = target.get("x")
-            ty = target.get("y")
-            if tx is not None and ty is not None:
-                button = normalize_click_button(target.get("button"))
-                try:
-                    fx = float(tx)
-                    fy = float(ty)
-                except (TypeError, ValueError):
-                    log("[execute] play target coordinates must be numbers")
-                    return
-                send(f"click {button} {fx} {fy}")
-                wait_ms(args.get("target_pause_ms", PAUSE_MS_AFTER_CLICK))
+        if isinstance(target, dict) and monster_idx is None:
+            fx, fy, button = parse_click_args(target)
+            send(f"click {button} {fx} {fy}")
+            wait_ms(args.get("target_pause_ms", PAUSE_MS_AFTER_CLICK))
+        elif target is not None and monster_idx is None:
+            raise ValueError("play click target must be an object with x/y")
         return
 
     log(f"[execute] unknown command '{cmd}'")
