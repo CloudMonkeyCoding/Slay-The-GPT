@@ -70,4 +70,6 @@ browser tab, so no API key or model selection is required.
 - The built-in planner instructions explicitly encourage playing every
   beneficial card before ending the turn, so most generated plans will exhaust
   playable options prior to issuing `END` unless holding a card is strategically
-  necessary.
+  necessary. They also force the planner to wait for an updated game state after
+  any card draw or new choice before considering `END`, preventing premature
+  turn finishes.

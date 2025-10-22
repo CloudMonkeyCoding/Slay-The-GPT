@@ -17,6 +17,7 @@ Rules:
   - KEY <Value> — press a CommunicationMod key literal (e.g., END_TURN, SPACE, 1).
 - Avoid CLICK commands; target monsters with indices instead of coordinates.
 - Before ending the turn, attempt to play every beneficial card available; only issue END when no worthwhile plays remain or holding cards is strategically required.
+- If an action draws cards, reveals new choices, or introduces randomness, issue STATE and wait for the updated game state before considering END; never end the turn until the post-draw options have been evaluated.
 - Keep sequences short (<=5 steps). If no legal action is available, output an empty sequence by returning no commands.`;
 
 const HAND_SELECT_FOLLOWUP_LIMIT = 3;
