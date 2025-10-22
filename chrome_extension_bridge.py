@@ -38,6 +38,65 @@ PAUSE_MS_AFTER_KEY = 150
 PAUSE_MS_AFTER_CLICK = 120
 
 
+CARD_KEY_ALIASES = {
+    **{str(i): f"CARD_{i}" for i in range(1, 11)},
+    **{f"CARD_{i}": f"CARD_{i}" for i in range(1, 11)},
+    "0": "CARD_10",
+}
+
+SPECIAL_KEY_ALIASES = {
+    "E": "END_TURN",
+    "END": "END_TURN",
+    "ENDTURN": "END_TURN",
+    "SPACE": "END_TURN",
+    "SPACEBAR": "END_TURN",
+    "ENTER": "CONFIRM",
+    "RETURN": "CONFIRM",
+    "CONFIRM": "CONFIRM",
+    "CANCEL": "CANCEL",
+    "ESC": "CANCEL",
+    "ESCAPE": "CANCEL",
+    "LEFT": "LEFT",
+    "RIGHT": "RIGHT",
+    "UP": "UP",
+    "DOWN": "DOWN",
+    "MAP": "MAP",
+    "DECK": "DECK",
+    "DRAW_PILE": "DRAW_PILE",
+    "DISCARD_PILE": "DISCARD_PILE",
+    "EXHAUST_PILE": "EXHAUST_PILE",
+    "DROP_CARD": "DROP_CARD",
+}
+
+
+def normalize_key_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    key = str(value).strip()
+    if not key:
+        return None
+    upper = key.upper()
+    if upper in CARD_KEY_ALIASES:
+        return CARD_KEY_ALIASES[upper]
+    if upper in SPECIAL_KEY_ALIASES:
+        return SPECIAL_KEY_ALIASES[upper]
+    # Allow direct CARD_* names and other supported identifiers.
+    return upper
+
+
+def normalize_click_button(value: Any) -> str:
+    if value is None:
+        return "LEFT"
+    name = str(value).strip().upper()
+    if name in {"LEFT", "RIGHT"}:
+        return name
+    if name in {"PRIMARY", "L", "MOUSE1"}:
+        return "LEFT"
+    if name in {"SECONDARY", "R", "MOUSE2"}:
+        return "RIGHT"
+    return "LEFT"
+
+
 def log(msg: str) -> None:
     sys.stderr.write(msg + "\n")
     sys.stderr.flush()
@@ -184,14 +243,17 @@ def execute_step(step: Dict[str, Any]) -> None:
     log(f"Executing step: command={cmd}, args={args}")
 
     if cmd == "wait":
-        wait_ms(int(args.get("ms", 100)))
+        ms = int(args.get("ms", 100))
+        send(f"wait {ms}")
+        wait_ms(ms)
         return
     if cmd == "state":
         send("state")
         _ = read_line()
         return
     if cmd == "key":
-        key = args.get("key") or args.get("value")
+        raw_key = args.get("key") or args.get("value")
+        key = normalize_key_name(raw_key)
         if not key:
             log("[execute] missing key value")
             return
@@ -204,7 +266,14 @@ def execute_step(step: Dict[str, Any]) -> None:
         if x is None or y is None:
             log("[execute] click missing coordinates")
             return
-        send(f"click {x} {y}")
+        button = normalize_click_button(args.get("button") or args.get("value"))
+        try:
+            fx = float(x)
+            fy = float(y)
+        except (TypeError, ValueError):
+            log("[execute] click coordinates must be numbers")
+            return
+        send(f"click {button} {fx} {fy}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_CLICK))
         return
     if cmd == "card":
@@ -222,7 +291,11 @@ def execute_step(step: Dict[str, Any]) -> None:
             log(f"[execute] uuid {uuid} not found in hand")
             return
         # CommunicationMod expects number keys (1-based) to select cards in hand.
-        send(f"key {idx + 1}")
+        key_name = normalize_key_name(str(idx + 1))
+        if not key_name:
+            log(f"[execute] unable to map card index {idx + 1} to key")
+            return
+        send(f"key {key_name}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
 
@@ -242,7 +315,11 @@ def execute_step(step: Dict[str, Any]) -> None:
         return
 
     if cmd == "end":
-        key = args.get("key") or args.get("value") or "e"
+        raw_key = args.get("key") or args.get("value") or "END_TURN"
+        key = normalize_key_name(raw_key)
+        if not key:
+            log("[execute] end command missing key mapping")
+            return
         send(f"key {key}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
@@ -261,14 +338,25 @@ def execute_step(step: Dict[str, Any]) -> None:
         if idx is None:
             log(f"[execute] uuid {uuid} not found in hand")
             return
-        send(f"key {idx + 1}")
+        key_name = normalize_key_name(str(idx + 1))
+        if not key_name:
+            log(f"[execute] unable to map card index {idx + 1} to key")
+            return
+        send(f"key {key_name}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         target = args.get("click")
         if isinstance(target, dict):
             tx = target.get("x")
             ty = target.get("y")
             if tx is not None and ty is not None:
-                send(f"click {int(tx)} {int(ty)}")
+                button = normalize_click_button(target.get("button"))
+                try:
+                    fx = float(tx)
+                    fy = float(ty)
+                except (TypeError, ValueError):
+                    log("[execute] play target coordinates must be numbers")
+                    return
+                send(f"click {button} {fx} {fy}")
                 wait_ms(args.get("target_pause_ms", PAUSE_MS_AFTER_CLICK))
         return
 
