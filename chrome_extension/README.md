@@ -62,7 +62,10 @@ browser tab, so no API key or model selection is required.
   you to exhaust a card), the extension automatically refreshes the state after
   the sequence finishes. If the game is waiting for a choice, it will request a
   follow-up command from ChatGPT (up to a few attempts) or remind you to run
-  Plan + Execute again so the exhaust target can be chosen.
+  Plan + Execute again so the exhaust target can be chosen. The planner
+  instructions now demand explicit `CHOOSE <OptionIndex>` commands for these
+  card selections using the 1-based ordering from `screen_state.hand` or
+  `choice_list`, so ChatGPT will name the target instead of deferring to you.
 - The manual command/sequence/log forms remain available below if you need to
   issue ad-hoc actions outside the automated workflow. The sequence textarea
   accepts plain-text commands (for example, `PLAY 2 1` or `END`) and still

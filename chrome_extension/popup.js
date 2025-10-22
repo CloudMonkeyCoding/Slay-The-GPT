@@ -12,12 +12,14 @@ Rules:
   - PLAY <CardIndex> [TargetIndex] — play a card from the hand, optionally targeting the specified monster.
   - END — end the player's turn.
   - WAIT [Milliseconds] — pause to allow animations (defaults to 250ms if omitted).
-  - CHOOSE <OptionIndex> — pick a menu or reward option.
+  - CHOOSE <OptionIndex> — pick a menu or reward option. When the state shows a pending hand/card selection (e.g., exhaust/discard/transform prompts), choose the card yourself by issuing CHOOSE with the 1-based index from the provided options.
   - STATE — request the latest state if more context is required.
   - KEY <Value> — press a CommunicationMod key literal (e.g., END_TURN, SPACE, 1).
 - Avoid CLICK commands; target monsters with indices instead of coordinates.
 - Before ending the turn, attempt to play every beneficial card available; only issue END when no worthwhile plays remain or holding cards is strategically required.
 - If an action draws cards, reveals new choices, or introduces randomness, issue STATE and wait for the updated game state before considering END; never end the turn until the post-draw options have been evaluated.
+- If multiple cards must be chosen, emit one CHOOSE command per selection (optionally separated by WAIT). Never defer the decision or request manual input.
+- Use the order shown in the state (screen_state.hand, choice_list, or other option arrays) to determine the 1-based index for each CHOOSE command.
 - Keep sequences short (<=5 steps). If no legal action is available, output an empty sequence by returning no commands.`;
 
 const HAND_SELECT_FOLLOWUP_LIMIT = 3;
