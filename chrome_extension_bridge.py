@@ -120,6 +120,116 @@ SPECIAL_KEY_ALIASES = {
 }
 
 
+MONSTER_INDEX_KEYS = (
+    "monster_index",
+    "monsterIndex",
+    "target_index",
+    "targetIndex",
+    "enemy_index",
+    "enemyIndex",
+    "monster_slot",
+    "monsterSlot",
+    "enemy_slot",
+    "enemySlot",
+    "target_slot",
+    "targetSlot",
+    "monster_position",
+    "monsterPosition",
+    "enemy_position",
+    "enemyPosition",
+    "target_position",
+    "targetPosition",
+    "position",
+    "pos",
+    "slot",
+)
+
+MONSTER_DIRECT_KEYS = ("monster", "enemy", "target")
+
+ZERO_BASED_MONSTER_KEYS = {
+    "monster_slot",
+    "monsterslot",
+    "enemy_slot",
+    "enemyslot",
+    "target_slot",
+    "targetslot",
+    "monster_position",
+    "monsterposition",
+    "enemy_position",
+    "enemyposition",
+    "target_position",
+    "targetposition",
+    "position",
+    "pos",
+    "slot",
+}
+
+MONSTER_UUID_KEYS = (
+    "monster_uuid",
+    "monsterUuid",
+    "enemy_uuid",
+    "enemyUuid",
+    "target_uuid",
+    "targetUuid",
+)
+
+MONSTER_NAME_KEYS = (
+    "monster_name",
+    "monsterName",
+    "enemy_name",
+    "enemyName",
+    "target_name",
+    "targetName",
+    "monster_id",
+    "monsterId",
+    "enemy_id",
+    "enemyId",
+    "target_id",
+    "targetId",
+)
+
+MONSTER_DESCRIPTOR_UUID_KEYS = (
+    "uuid",
+    "monster_uuid",
+    "monsterUuid",
+    "enemy_uuid",
+    "enemyUuid",
+    "target_uuid",
+    "targetUuid",
+)
+
+MONSTER_DESCRIPTOR_NAME_KEYS = (
+    "name",
+    "monster_name",
+    "monsterName",
+    "enemy_name",
+    "enemyName",
+    "target_name",
+    "targetName",
+    "monster_id",
+    "monsterId",
+    "enemy_id",
+    "enemyId",
+    "target_id",
+    "targetId",
+    "id",
+    "label",
+    "display",
+    "display_name",
+    "displayName",
+)
+
+MONSTER_LIST_KEYS = (
+    "monsters",
+    "monster_list",
+    "enemy_list",
+    "enemies",
+    "current_monsters",
+    "active_monsters",
+    "living_monsters",
+)
+
+
 def normalize_key_name(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -342,6 +452,90 @@ def hand_index_for_uuid(gs: Dict[str, Any], uuid: str) -> Optional[int]:
     return None
 
 
+def extract_monsters(state: Any, visited: Optional[Set[int]] = None) -> List[Dict[str, Any]]:
+    if state is None:
+        return []
+    if visited is None:
+        visited = set()
+    obj_id = id(state)
+    if obj_id in visited:
+        return []
+    visited.add(obj_id)
+
+    if isinstance(state, list):
+        if not state:
+            return []
+        if all(isinstance(item, dict) for item in state):
+            if any(
+                isinstance(monster, dict)
+                and any(
+                    key in monster
+                    for key in (
+                        *MONSTER_DESCRIPTOR_UUID_KEYS,
+                        *MONSTER_DESCRIPTOR_NAME_KEYS,
+                        "current_hp",
+                        "currentHp",
+                        "max_hp",
+                        "maxHp",
+                        "intent",
+                        "is_dead",
+                        "isDead",
+                    )
+                )
+                for monster in state
+            ):
+                return state  # type: ignore[return-value]
+        for item in state:
+            if isinstance(item, (dict, list)):
+                monsters = extract_monsters(item, visited)
+                if monsters:
+                    return monsters
+        return []
+
+    if not isinstance(state, dict):
+        return []
+
+    for key in MONSTER_LIST_KEYS:
+        value = state.get(key)
+        if isinstance(value, list):
+            if not value:
+                return value
+            if all(isinstance(item, dict) for item in value):
+                if any(
+                    isinstance(monster, dict)
+                    and any(
+                        key in monster
+                        for key in (
+                            *MONSTER_DESCRIPTOR_UUID_KEYS,
+                            *MONSTER_DESCRIPTOR_NAME_KEYS,
+                            "current_hp",
+                            "currentHp",
+                            "max_hp",
+                            "maxHp",
+                            "intent",
+                            "is_dead",
+                            "isDead",
+                        )
+                    )
+                    for monster in value
+                ):
+                    return value  # type: ignore[return-value]
+        elif isinstance(value, dict):
+            inner = value.get("monsters")
+            if isinstance(inner, list):
+                if not inner:
+                    return inner
+                if all(isinstance(item, dict) for item in inner):
+                    return inner  # type: ignore[return-value]
+
+    for child in state.values():
+        if isinstance(child, (dict, list)):
+            monsters = extract_monsters(child, visited)
+            if monsters:
+                return monsters
+    return []
+
+
 def parse_int(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -510,11 +704,175 @@ def resolve_card_index(args: Dict[str, Any]) -> int:
 
 
 def resolve_monster_index(args: Dict[str, Any]) -> Optional[int]:
-    for key in ("monster_index", "target_index", "target", "monster"):
-        idx = parse_int(args.get(key))
+    uuid: Optional[str] = None
+    monster_name: Optional[str] = None
+
+    def normalize_text(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text else None
+
+    def is_click_spec(value: Any) -> bool:
+        return isinstance(value, dict) and {"x", "y"}.issubset(value.keys())
+
+    def resolve_numeric(value: Any, *, zero_based: bool = False) -> Optional[int]:
+        idx = parse_int(value)
+        if idx is None:
+            return None
+        if zero_based:
+            idx += 1
+        if idx < 1:
+            return None
+        return idx
+
+    def ingest_descriptor(spec: Dict[str, Any]) -> Optional[int]:
+        nonlocal uuid, monster_name
+        if not isinstance(spec, dict) or is_click_spec(spec):
+            return None
+        for key in (*MONSTER_INDEX_KEYS, *MONSTER_DIRECT_KEYS, "index"):
+            if key not in spec:
+                continue
+            value = spec.get(key)
+            if is_click_spec(value):
+                continue
+            idx = resolve_numeric(value, zero_based=str(key).lower() in ZERO_BASED_MONSTER_KEYS)
+            if idx is not None:
+                return idx
+            text = normalize_text(value)
+            if text and monster_name is None:
+                monster_name = text
+        for key in MONSTER_DESCRIPTOR_UUID_KEYS:
+            if key in spec and uuid is None:
+                text = normalize_text(spec.get(key))
+                if text:
+                    uuid = text
+        for key in MONSTER_DESCRIPTOR_NAME_KEYS:
+            if key in spec and monster_name is None:
+                text = normalize_text(spec.get(key))
+                if text:
+                    monster_name = text
+        return None
+
+    for key in MONSTER_INDEX_KEYS:
+        if key not in args:
+            continue
+        value = args.get(key)
+        if isinstance(value, dict):
+            idx = ingest_descriptor(value)
+            if idx is not None:
+                return idx
+            continue
+        idx = resolve_numeric(value, zero_based=key.lower() in ZERO_BASED_MONSTER_KEYS)
         if idx is not None:
             return idx
-    return None
+        text = normalize_text(value)
+        if text and monster_name is None:
+            monster_name = text
+
+    for key in MONSTER_DIRECT_KEYS:
+        if key not in args:
+            continue
+        value = args.get(key)
+        if isinstance(value, dict):
+            idx = ingest_descriptor(value)
+            if idx is not None:
+                return idx
+            continue
+        if is_click_spec(value):
+            continue
+        idx = resolve_numeric(value, zero_based=key.lower() in ZERO_BASED_MONSTER_KEYS)
+        if idx is not None:
+            return idx
+        text = normalize_text(value)
+        if text and monster_name is None:
+            monster_name = text
+
+    for key in MONSTER_UUID_KEYS:
+        if key in args and uuid is None:
+            text = normalize_text(args.get(key))
+            if text:
+                uuid = text
+
+    for key in MONSTER_NAME_KEYS:
+        if key in args and monster_name is None:
+            text = normalize_text(args.get(key))
+            if text:
+                monster_name = text
+
+    if uuid is None and monster_name is None:
+        return None
+
+    state = controller.get_state(full=True, refresh=False)
+    if state is None:
+        state = controller.get_state(full=True, refresh=True)
+    game_state = (state or {}).get("game_state") if isinstance(state, dict) else None
+    if not isinstance(game_state, dict):
+        game_state = state if isinstance(state, dict) else {}
+    monsters = extract_monsters(game_state)
+
+    if not monsters:
+        raise ValueError(f"Monster index could not be resolved from args: {args}")
+
+    def matches_text(candidate: Any, target: str) -> bool:
+        if candidate is None:
+            return False
+        cand = str(candidate).strip().lower()
+        targ = target.strip().lower()
+        if not cand or not targ:
+            return False
+        if cand == targ:
+            return True
+        cand_comp = cand.replace("_", "").replace(" ", "")
+        targ_comp = targ.replace("_", "").replace(" ", "")
+        if cand_comp == targ_comp:
+            return True
+        if cand.startswith(targ) or targ.startswith(cand):
+            return True
+        if cand_comp.startswith(targ_comp) or targ_comp.startswith(cand_comp):
+            return True
+        return False
+
+    def iter_monster_values(monster: Dict[str, Any], keys: Tuple[str, ...]) -> List[Any]:
+        values: List[Any] = []
+        stack: List[Any] = [monster]
+        visited: Set[int] = set()
+        while stack:
+            item = stack.pop()
+            item_id = id(item)
+            if item_id in visited:
+                continue
+            visited.add(item_id)
+            if isinstance(item, dict):
+                for key in keys:
+                    if key in item and item[key] not in (None, ""):
+                        values.append(item[key])
+                for child in item.values():
+                    if isinstance(child, (dict, list)):
+                        stack.append(child)
+            elif isinstance(item, list):
+                for child in item:
+                    if isinstance(child, (dict, list)):
+                        stack.append(child)
+        return values
+
+    if uuid:
+        target_uuid = uuid.strip().lower()
+        for idx, monster in enumerate(monsters):
+            for candidate in iter_monster_values(monster, MONSTER_DESCRIPTOR_UUID_KEYS):
+                if candidate is None:
+                    continue
+                cand = str(candidate).strip().lower()
+                if cand and cand == target_uuid:
+                    return idx + 1
+
+    if monster_name:
+        for idx, monster in enumerate(monsters):
+            for candidate in iter_monster_values(monster, MONSTER_DESCRIPTOR_NAME_KEYS):
+                if matches_text(candidate, monster_name):
+                    return idx + 1
+
+    raise ValueError(f"Monster index could not be resolved from args: {args}")
 
 
 def parse_click_args(value: Any) -> Tuple[float, float, str]:
