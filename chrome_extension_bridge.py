@@ -28,7 +28,7 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 
 HOST = os.environ.get("CHROME_BRIDGE_HOST", "127.0.0.1")
@@ -36,6 +36,57 @@ PORT = int(os.environ.get("CHROME_BRIDGE_PORT", "8123"))
 
 PAUSE_MS_AFTER_KEY = 150
 PAUSE_MS_AFTER_CLICK = 120
+
+
+CARD_INDEX_KEYS = (
+    "index",
+    "value",
+    "card",
+    "slot",
+    "hand_index",
+    "card_index",
+    "cardIndex",
+    "handIndex",
+    "position",
+    "pos",
+    "card_slot",
+    "cardSlot",
+    "slot_index",
+    "slotIndex",
+    "card_position",
+    "cardPosition",
+)
+
+ZERO_BASED_CARD_KEYS = {
+    "hand_index",
+    "handindex",
+    "hand_position",
+    "handposition",
+    "position",
+    "pos",
+    "card_slot",
+    "cardslot",
+    "slot",
+    "slot_index",
+    "slotindex",
+    "card_position",
+    "cardposition",
+}
+
+CARD_UUID_KEYS = ("uuid", "card_uuid", "cardUuid", "cardUUID")
+CARD_ID_KEYS = ("card_id", "cardId", "id")
+CARD_NAME_KEYS = ("card_name", "cardName", "name", "label", "display")
+
+HAND_LIST_KEYS = (
+    "hand",
+    "player_hand",
+    "playerHand",
+    "hand_cards",
+    "handCards",
+    "cards_in_hand",
+    "cardsInHand",
+    "cards",
+)
 
 
 CARD_KEY_ALIASES = {
@@ -224,14 +275,69 @@ def make_trimmed_snapshot(envelope: Dict[str, Any]) -> Dict[str, Any]:
 # ---- Execution helpers ---------------------------------------------------
 
 
+def extract_hand_cards(state: Any, visited: Optional[Set[int]] = None) -> List[Dict[str, Any]]:
+    if state is None:
+        return []
+    if visited is None:
+        visited = set()
+    obj_id = id(state)
+    if obj_id in visited:
+        return []
+    visited.add(obj_id)
+
+    if isinstance(state, list):
+        if not state:
+            return []
+        if all(isinstance(item, dict) for item in state):
+            if any(
+                isinstance(card, dict)
+                and any(key in card for key in ("uuid", "card_uuid", "card_id", "cardId", "id", "name", "card_name"))
+                for card in state
+            ):
+                return state  # type: ignore[return-value]
+        for item in state:
+            if isinstance(item, (dict, list)):
+                hand = extract_hand_cards(item, visited)
+                if hand:
+                    return hand
+        return []
+
+    if not isinstance(state, dict):
+        return []
+
+    for key in HAND_LIST_KEYS:
+        value = state.get(key)
+        if isinstance(value, list):
+            if not value:
+                return value  # empty hand still useful
+            if all(isinstance(item, dict) for item in value):
+                if any(
+                    isinstance(card, dict)
+                    and any(key in card for key in ("uuid", "card_uuid", "card_id", "cardId", "id", "name", "card_name"))
+                    for card in value
+                ):
+                    return value  # type: ignore[return-value]
+
+    for child in state.values():
+        if isinstance(child, (dict, list)):
+            hand = extract_hand_cards(child, visited)
+            if hand:
+                return hand
+    return []
+
+
 def hand_index_for_uuid(gs: Dict[str, Any], uuid: str) -> Optional[int]:
-    hand = gs.get("hand")
-    if hand is None:
-        hand = gs.get("game_state", {}).get("hand")
+    if not uuid:
+        return None
+    hand = extract_hand_cards(gs)
     if not hand:
         return None
+    target = str(uuid).strip().lower()
+    if not target:
+        return None
     for idx, card in enumerate(hand):
-        if card.get("uuid") == uuid:
+        candidate = card.get("uuid") or card.get("card_uuid")
+        if candidate and str(candidate).strip().lower() == target:
             return idx
     return None
 
@@ -280,21 +386,127 @@ def parse_card_index(value: Any) -> Optional[int]:
 
 
 def resolve_card_index(args: Dict[str, Any]) -> int:
-    uuid = args.get("uuid") or args.get("card_uuid")
-    for key in ("index", "value", "card", "slot", "hand_index"):
-        idx = parse_card_index(args.get(key))
+    uuid: Optional[str] = None
+    card_name: Optional[str] = None
+    card_id: Optional[str] = None
+
+    def normalize_text(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text else None
+
+    def resolve_numeric(value: Any, *, zero_based: bool = False) -> Optional[int]:
+        if zero_based:
+            raw = parse_int(value)
+            if raw is None:
+                return None
+            idx = raw + 1
+        else:
+            idx = parse_card_index(value)
+        if idx is None:
+            return None
+        if 1 <= idx <= 10:
+            return idx
+        return None
+
+    for key in CARD_INDEX_KEYS:
+        if key not in args:
+            continue
+        value = args.get(key)
+        if isinstance(value, dict):
+            continue
+        normalized = key.lower()
+        idx = resolve_numeric(value, zero_based=normalized in ZERO_BASED_CARD_KEYS)
         if idx is not None:
             return idx
-    if uuid:
-        state = controller.get_state(full=True, refresh=False)
-        if state is None:
-            state = controller.get_state(full=True, refresh=True)
-        if state:
-            gs = state.get("game_state") or {}
-            found = hand_index_for_uuid(gs, uuid)
-            if found is not None:
-                return found + 1
-    raise ValueError("Card index could not be resolved from args")
+        if key.lower() == "card" and card_name is None:
+            card_name = normalize_text(value)
+
+    card_spec = args.get("card")
+    if isinstance(card_spec, dict):
+        for key in CARD_INDEX_KEYS:
+            if key not in card_spec:
+                continue
+            value = card_spec.get(key)
+            if isinstance(value, dict):
+                continue
+            normalized = key.lower()
+            idx = resolve_numeric(value, zero_based=normalized in ZERO_BASED_CARD_KEYS)
+            if idx is not None:
+                return idx
+        for key in CARD_UUID_KEYS:
+            if uuid is None and key in card_spec:
+                uuid = normalize_text(card_spec.get(key))
+        for key in CARD_ID_KEYS:
+            if card_id is None and key in card_spec:
+                card_id = normalize_text(card_spec.get(key))
+        for key in CARD_NAME_KEYS:
+            if card_name is None and key in card_spec:
+                card_name = normalize_text(card_spec.get(key))
+    elif card_spec is not None and card_name is None:
+        card_name = normalize_text(card_spec)
+
+    for key in CARD_UUID_KEYS:
+        if uuid is None and key in args:
+            uuid = normalize_text(args.get(key))
+    for key in CARD_ID_KEYS:
+        if card_id is None and key in args:
+            card_id = normalize_text(args.get(key))
+    for key in CARD_NAME_KEYS:
+        if card_name is None and key in args:
+            card_name = normalize_text(args.get(key))
+
+    state = controller.get_state(full=True, refresh=False)
+    if state is None:
+        state = controller.get_state(full=True, refresh=True)
+    game_state = (state or {}).get("game_state") if isinstance(state, dict) else None
+    if not isinstance(game_state, dict):
+        game_state = state if isinstance(state, dict) else {}
+    hand = extract_hand_cards(game_state)
+
+    def matches_card_text(candidate: Any, target: str) -> bool:
+        if candidate is None:
+            return False
+        cand = str(candidate).strip().lower()
+        targ = target.strip().lower()
+        if not cand or not targ:
+            return False
+        if cand == targ:
+            return True
+        cand_comp = cand.replace("_", "").replace(" ", "")
+        targ_comp = targ.replace("_", "").replace(" ", "")
+        if cand_comp == targ_comp:
+            return True
+        if cand.startswith(targ) or targ.startswith(cand):
+            return True
+        if cand_comp.startswith(targ_comp) or targ_comp.startswith(cand_comp):
+            return True
+        return False
+
+    if hand:
+        if uuid:
+            target_uuid = uuid.strip().lower()
+            for idx, card in enumerate(hand):
+                card_uuid = None
+                for key in CARD_UUID_KEYS:
+                    if key in card and card[key]:
+                        card_uuid = str(card[key]).strip().lower()
+                        break
+                if card_uuid and card_uuid == target_uuid:
+                    return idx + 1
+        if card_id:
+            for idx, card in enumerate(hand):
+                for key in CARD_ID_KEYS:
+                    if key in card and matches_card_text(card[key], card_id):
+                        return idx + 1
+        if card_name:
+            for idx, card in enumerate(hand):
+                for key in (*CARD_NAME_KEYS, *CARD_ID_KEYS):
+                    if key in card and matches_card_text(card[key], card_name):
+                        return idx + 1
+
+    raise ValueError(f"Card index could not be resolved from args: {args}")
 
 
 def resolve_monster_index(args: Dict[str, Any]) -> Optional[int]:
