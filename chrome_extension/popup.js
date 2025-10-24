@@ -1134,40 +1134,6 @@ async function planAction({ execute }) {
   }
 }
 
-function parseJSONField(value, fallback) {
-  if (!value.trim()) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(value);
-  } catch (err) {
-    throw new Error(`Invalid JSON: ${err.message}`);
-  }
-}
-
-async function sendCommand(event) {
-  event.preventDefault();
-  const name = document.getElementById("command-name").value;
-  const argsField = document.getElementById("command-args");
-  let args = {};
-  try {
-    args = parseJSONField(argsField.value, {});
-  } catch (err) {
-    log(err.message, "error");
-    argsField.focus();
-    return;
-  }
-  try {
-    const resp = await fetchJSON("/command", {
-      method: "POST",
-      body: JSON.stringify({ command: name, args }),
-    });
-    log(`Command sent: ${JSON.stringify(resp)}`, "success");
-  } catch (err) {
-    log(`Command failed: ${err.message}`, "error");
-  }
-}
-
 async function postSequenceSteps(steps, { origin = "manual" } = {}) {
   if (!Array.isArray(steps)) {
     throw new Error("Sequence must be an array of steps");
@@ -1203,27 +1169,6 @@ async function sendSequence(event) {
     await postSequenceSteps(steps, { origin: "manual" });
   } catch (err) {
     log(`Sequence failed: ${err.message}`, "error");
-  }
-}
-
-async function sendLog(event) {
-  event.preventDefault();
-  const field = document.getElementById("log-message");
-  const message = field.value.trim();
-  if (!message) {
-    log("Log message cannot be empty", "warning");
-    field.focus();
-    return;
-  }
-  try {
-    const resp = await fetchJSON("/log", {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    });
-    log(`Logged message: ${JSON.stringify(resp)}`, "success");
-    field.value = "";
-  } catch (err) {
-    log(`Log failed: ${err.message}`, "error");
   }
 }
 
@@ -1294,9 +1239,7 @@ async function init() {
   document.getElementById("copy-state").addEventListener("click", () => copyDisplayedState());
   document.getElementById("copy-plan").addEventListener("click", () => copyPromptText());
 
-  document.getElementById("command-form").addEventListener("submit", sendCommand);
   document.getElementById("sequence-form").addEventListener("submit", sendSequence);
-  document.getElementById("log-form").addEventListener("submit", sendLog);
 
   refreshHealth();
   refreshState({ silent: true }).catch(() => {

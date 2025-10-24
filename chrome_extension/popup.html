@@ -80,25 +80,6 @@
     </section>
 
     <section>
-      <h2>Send Command</h2>
-      <form id="command-form">
-        <label class="field">
-          Command
-          <select id="command-name">
-            <option value="key">key</option>
-            <option value="click">click</option>
-            <option value="wait">wait</option>
-          </select>
-        </label>
-        <label class="field">
-          Arguments (JSON)
-          <textarea id="command-args" rows="4" placeholder='{ "key": "e" }'></textarea>
-        </label>
-        <button type="submit">Send</button>
-      </form>
-    </section>
-
-    <section>
       <h2>Send Sequence</h2>
       <form id="sequence-form">
         <label class="field">
@@ -106,17 +87,6 @@
           <textarea id="sequence-steps" rows="4" placeholder="PLAY 1\nEND"></textarea>
         </label>
         <button type="submit">Send Sequence</button>
-      </form>
-    </section>
-
-    <section>
-      <h2>Log Message</h2>
-      <form id="log-form">
-        <label class="field">
-          Message
-          <textarea id="log-message" rows="2" placeholder="Message to append to bridge log"></textarea>
-        </label>
-        <button type="submit">Send Log</button>
       </form>
     </section>
 

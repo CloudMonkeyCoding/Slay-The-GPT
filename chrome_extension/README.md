@@ -14,7 +14,6 @@ the original `ai_controller_hardcoded_key.py` GUI exposed.
   the active chatgpt.com tab on your behalf, then wait for the reply and
   auto-send captured sequences to the bridge when requested
 - Toggle between trimmed and full CommunicationMod state snapshots for display
-- Forms to send single commands, action sequences, and log messages
 - Configurable bridge URL and trimmed/full snapshot preference persisted with
   Chrome sync/local storage
 
@@ -69,10 +68,10 @@ browser tab, so no API key or model selection is required.
 - Indices are strictly 1-based; index `1` selects the first option. The popup
   normalizes any zero-based `CHOOSE` output from older prompts and will reject
   negative values before sending the sequence to CommunicationMod.
-- The manual command/sequence/log forms remain available below if you need to
-  issue ad-hoc actions outside the automated workflow. The sequence textarea
-  accepts plain-text commands (for example, `PLAY 2 1` or `END`) and still
-  understands the older JSON array/object format if you prefer it.
+- The sequence textarea accepts plain-text commands (for example, `PLAY 2 1` or
+  `END`) and still understands the older JSON array/object format if you prefer
+  it for manual tweaks. Any captured ChatGPT output is mirrored there before the
+  bridge executes it so you can make quick edits.
 - The built-in planner instructions explicitly encourage playing every
   beneficial card before ending the turn, so most generated plans will exhaust
   playable options prior to issuing `END` unless holding a card is strategically
