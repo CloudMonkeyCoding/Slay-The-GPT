@@ -29,12 +29,72 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 HOST = os.environ.get("CHROME_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CHROME_BRIDGE_PORT", "8123"))
 
 PAUSE_MS_AFTER_KEY = 150
 PAUSE_MS_AFTER_CLICK = 120
+
+SPECIAL_KEY_MAP = {
+    "E": "END_TURN",
+    "END": "END_TURN",
+    "ENDTURN": "END_TURN",
+    "SPACE": "END_TURN",
+    "SPACEBAR": "END_TURN",
+    "ENTER": "CONFIRM",
+    "RETURN": "CONFIRM",
+    "CONFIRM": "CONFIRM",
+    "CANCEL": "CANCEL",
+    "ESC": "CANCEL",
+    "ESCAPE": "CANCEL",
+}
+
+TARGET_INDEX_KEYS = (
+    "target_index",
+    "targetIndex",
+    "monster_index",
+    "monsterIndex",
+    "enemy_index",
+    "enemyIndex",
+    "target",
+    "monster",
+    "enemy",
+)
+
+
+def normalize_key_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if upper in SPECIAL_KEY_MAP:
+        return SPECIAL_KEY_MAP[upper]
+    if upper.startswith("CARD_"):
+        return upper
+    if upper.isdigit():
+        number = int(upper)
+        if number == 0:
+            number = 10
+        if 1 <= number <= 10:
+            return f"CARD_{number}"
+    return upper
+
+
+def normalize_click_button(value: Any) -> str:
+    if value is None:
+        return "LEFT"
+    name = str(value).strip().upper()
+    if name in {"LEFT", "RIGHT"}:
+        return name
+    if name in {"PRIMARY", "L", "MOUSE1"}:
+        return "LEFT"
+    if name in {"SECONDARY", "R", "MOUSE2"}:
+        return "RIGHT"
+    return "LEFT"
 
 
 def log(msg: str) -> None:
@@ -164,16 +224,109 @@ def make_trimmed_snapshot(envelope: Dict[str, Any]) -> Dict[str, Any]:
 # ---- Execution helpers ---------------------------------------------------
 
 
-def hand_index_for_uuid(gs: Dict[str, Any], uuid: str) -> Optional[int]:
-    hand = gs.get("hand")
-    if hand is None:
-        hand = gs.get("game_state", {}).get("hand")
-    if not hand:
+def parse_positive_index(value: Any, *, name: str) -> int:
+    if value is None:
+        raise ValueError(f"{name} is required")
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    if isinstance(value, (int, float)):
+        number = int(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{name} is required")
+        upper = text.upper()
+        if upper.startswith('CARD_'):
+            upper = upper[5:]
+        number = int(upper)
+    if number < 1:
+        raise ValueError(f"{name} must be >= 1")
+    return number
+
+
+def parse_non_negative_index(value: Any, *, name: str, prefixes: Tuple[str, ...] = ()) -> int:
+    if value is None:
+        raise ValueError(f"{name} is required")
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if isinstance(value, (int, float)):
+        number = int(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{name} is required")
+        upper = text.upper()
+        for prefix in prefixes:
+            if upper.startswith(prefix):
+                upper = upper[len(prefix) :]
+                break
+        number = int(upper)
+    if number < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return number
+
+
+def resolve_card_index(args: Dict[str, Any]) -> int:
+    if not isinstance(args, dict):
+        raise ValueError('Card index could not be resolved from args')
+    candidates = (
+        'index',
+        'value',
+        'card',
+        'card_index',
+        'cardIndex',
+        'slot',
+    )
+    for key in candidates:
+        if key not in args:
+            continue
+        value = args.get(key)
+        if isinstance(value, dict):
+            continue
+        try:
+            return parse_positive_index(value, name='Card index')
+        except ValueError:
+            continue
+    card_spec = args.get('card')
+    if isinstance(card_spec, dict):
+        for key in ('index', 'value'):
+            if key in card_spec:
+                return parse_positive_index(card_spec[key], name='Card index')
+    raise ValueError(f"Card index could not be resolved from args: {args}")
+
+
+def resolve_monster_index(args: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(args, dict):
         return None
-    for idx, card in enumerate(hand):
-        if card.get("uuid") == uuid:
-            return idx
+    for key in TARGET_INDEX_KEYS:
+        if key not in args:
+            continue
+        value = args.get(key)
+        if isinstance(value, dict):
+            continue
+        try:
+            return parse_non_negative_index(
+                value,
+                name='Target index',
+                prefixes=('TARGET_', 'MONSTER_', 'ENEMY_'),
+            )
+        except ValueError:
+            continue
     return None
+
+
+def parse_click_args(value: Any) -> Tuple[float, float, str]:
+    if not isinstance(value, dict):
+        raise ValueError("Click args must be an object with x/y")
+    if "x" not in value or "y" not in value:
+        raise ValueError("Click args missing x/y coordinates")
+    try:
+        fx = float(value.get("x"))
+        fy = float(value.get("y"))
+    except (TypeError, ValueError):
+        raise ValueError("Click coordinates must be numbers")
+    button = normalize_click_button(value.get("button"))
+    return fx, fy, button
 
 
 def execute_step(step: Dict[str, Any]) -> None:
@@ -183,17 +336,23 @@ def execute_step(step: Dict[str, Any]) -> None:
     log(f"Executing step: command={cmd}, args={args}")
 
     if cmd == "wait":
-        wait_ms(int(args.get("ms", 100)))
+        ms_value = args.get("ms", 100)
+        try:
+            ms = int(ms_value)
+        except (TypeError, ValueError):
+            raise ValueError("wait command requires numeric 'ms'")
+        send(f"wait {ms}")
+        wait_ms(ms)
         return
     if cmd == "state":
         send("state")
         _ = read_line()
         return
     if cmd == "key":
-        key = args.get("key")
+        raw_key = args.get("key") or args.get("value")
+        key = normalize_key_name(raw_key)
         if not key:
-            log("[execute] missing key value")
-            return
+            raise ValueError("key command missing key/value")
         send(f"key {key}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
         return
@@ -201,28 +360,63 @@ def execute_step(step: Dict[str, Any]) -> None:
         x = args.get("x")
         y = args.get("y")
         if x is None or y is None:
-            log("[execute] click missing coordinates")
-            return
-        send(f"click {x} {y}")
+            raise ValueError("click command missing x/y coordinates")
+        button = normalize_click_button(args.get("button") or args.get("value"))
+        try:
+            fx = float(x)
+            fy = float(y)
+        except (TypeError, ValueError):
+            raise ValueError("click coordinates must be numbers")
+        send(f"click {button} {fx} {fy}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_CLICK))
         return
     if cmd == "card":
-        uuid = args.get("uuid")
-        if not uuid:
-            log("[execute] card command missing uuid")
-            return
-        state = controller.get_state(full=True)
-        if not state:
-            log("[execute] unable to fetch state for card command")
-            return
-        gs = state.get("game_state") or {}
-        idx = hand_index_for_uuid(gs, uuid)
-        if idx is None:
-            log(f"[execute] uuid {uuid} not found in hand")
-            return
-        # CommunicationMod expects number keys (1-based) to select cards in hand.
-        send(f"key {idx + 1}")
+        idx = resolve_card_index(args)
+        key_name = normalize_key_name(str(idx))
+        if not key_name:
+            raise ValueError(f"unable to map card index {idx} to key")
+        send(f"key {key_name}")
         wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "choose":
+        index = args.get("index")
+        if index is None:
+            index = args.get("value")
+        if index is None:
+            raise ValueError("choose command missing index/value")
+        try:
+            choice = int(index)
+        except (TypeError, ValueError):
+            choice = index
+        send(f"choose {choice}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "end":
+        raw_key = args.get("key") or args.get("value") or "END_TURN"
+        key = normalize_key_name(raw_key)
+        if not key:
+            raise ValueError("end command missing key mapping")
+        send(f"key {key}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        return
+
+    if cmd == "play":
+        idx = resolve_card_index(args)
+        monster_idx = resolve_monster_index(args)
+        if monster_idx is not None:
+            send(f"play {idx} {monster_idx}")
+        else:
+            send(f"play {idx}")
+        wait_ms(args.get("pause_ms", PAUSE_MS_AFTER_KEY))
+        target = args.get("click")
+        if isinstance(target, dict) and monster_idx is None:
+            fx, fy, button = parse_click_args(target)
+            send(f"click {button} {fx} {fy}")
+            wait_ms(args.get("target_pause_ms", PAUSE_MS_AFTER_CLICK))
+        elif target is not None and monster_idx is None:
+            raise ValueError("play click target must be an object with x/y")
         return
 
     log(f"[execute] unknown command '{cmd}'")
@@ -303,13 +497,20 @@ class ChromeBridgeHandler(BaseHTTPRequestHandler):
         self._set_headers(HTTPStatus.NO_CONTENT)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path.startswith("/health"):
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             self._set_headers()
             self.wfile.write(b"{\"status\": \"ok\"}")
             return
-        if self.path.startswith("/state"):
-            full = "full=1" in self.path or "full=true" in self.path.lower()
-            state = controller.get_state(full=full)
+        if parsed.path == "/state":
+            params = parse_qs(parsed.query)
+            full = False
+            refresh = True
+            if "full" in params:
+                full = any(value.lower() in ("1", "true", "yes") for value in params.get("full", []))
+            if "refresh" in params:
+                refresh = not any(value.lower() in ("0", "false", "no") for value in params.get("refresh", []))
+            state = controller.get_state(full=full, refresh=refresh)
             if state is None:
                 self._set_headers(HTTPStatus.BAD_GATEWAY)
                 self.wfile.write(b"{\"error\": \"no_state\"}")

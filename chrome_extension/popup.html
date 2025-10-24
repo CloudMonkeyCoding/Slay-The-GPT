@@ -21,59 +21,72 @@
           spellcheck="false"
         />
       </label>
-      <div class="buttons">
-        <button id="save-host" type="button">Save</button>
+      <div class="buttons-column">
+        <button id="save-settings" type="button">Save Settings</button>
         <button id="refresh-health" type="button">Health</button>
-        <button id="refresh-state" type="button">State</button>
+        <button id="snapshot-button" type="button">Snapshot</button>
       </div>
     </section>
 
     <section>
-      <h2>State Snapshot</h2>
-      <label>
-        <input type="checkbox" id="full-state" /> Request full envelope
+      <h2>ChatGPT Planner</h2>
+      <p class="note">
+        Open <strong>chatgpt.com</strong> in the current tab before using these buttons.
+        The extension will paste the prompt into the ChatGPT composer and press send for
+        you.
+      </p>
+      <label class="field checkbox">
+        <input type="checkbox" id="trimmed-to-gpt" checked />
+        <span>Send trimmed snapshot to ChatGPT (otherwise send the full envelope)</span>
       </label>
+      <div class="buttons-row">
+        <button id="plan-execute" type="button">Plan + Execute</button>
+        <button id="plan-only" type="button" class="button-secondary">
+          Plan only
+        </button>
+        <button id="refresh-state" type="button" class="button-secondary">
+          Refresh state
+        </button>
+        <button id="quit-button" type="button" class="button-danger">
+          Quit
+        </button>
+      </div>
+    </section>
+
+    <section>
+      <div class="output-title">
+        <h2>Latest Snapshot</h2>
+        <div class="title-actions">
+          <label class="field checkbox">
+            <input type="checkbox" id="full-state" />
+            <span>Display full envelope</span>
+          </label>
+          <button id="copy-state" type="button" class="button-secondary button-small">
+            Copy JSON
+          </button>
+        </div>
+      </div>
       <pre id="state-output" class="output"></pre>
     </section>
 
     <section>
-      <h2>Send Command</h2>
-      <form id="command-form">
-        <label class="field">
-          Command
-          <select id="command-name">
-            <option value="key">key</option>
-            <option value="click">click</option>
-            <option value="wait">wait</option>
-          </select>
-        </label>
-        <label class="field">
-          Arguments (JSON)
-          <textarea id="command-args" rows="4" placeholder='{ "key": "e" }'></textarea>
-        </label>
-        <button type="submit">Send</button>
-      </form>
+      <div class="output-title">
+        <h2>Last Prompt</h2>
+        <button id="copy-plan" type="button" class="button-secondary button-small">
+          Copy Prompt
+        </button>
+      </div>
+      <pre id="plan-output" class="output"></pre>
     </section>
 
     <section>
       <h2>Send Sequence</h2>
       <form id="sequence-form">
         <label class="field">
-          Steps (JSON Array)
-          <textarea id="sequence-steps" rows="4" placeholder='[ { "command": "key", "args": { "key": "e" } } ]'></textarea>
+          Steps (commands or JSON)
+          <textarea id="sequence-steps" rows="4" placeholder="PLAY 1\nEND"></textarea>
         </label>
         <button type="submit">Send Sequence</button>
-      </form>
-    </section>
-
-    <section>
-      <h2>Log Message</h2>
-      <form id="log-form">
-        <label class="field">
-          Message
-          <textarea id="log-message" rows="2" placeholder="Message to append to bridge log"></textarea>
-        </label>
-        <button type="submit">Send Log</button>
       </form>
     </section>
 
