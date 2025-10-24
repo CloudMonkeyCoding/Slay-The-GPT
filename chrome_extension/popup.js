@@ -8,14 +8,15 @@ const SYSTEM_INSTRUCTIONS = `You are an expert Slay the Spire planner that outpu
 Reference: https://github.com/ForgottenArbiter/CommunicationMod (all commands below come from this protocol).
 Rules:
 - Return ONLY plain-text commands, one per line. Do not include JSON, prose, or commentary.
-- Command syntax (1-based indices):
-  - PLAY <CardIndex> [TargetIndex] — play a card from the hand, optionally targeting the specified monster.
+- Command syntax (card/choice indices are 1-based; monster targets are 0-based):
+  - PLAY <CardIndex> [TargetIndex] — play a card from the hand. CardIndex uses the 1-based hand order; TargetIndex uses the 0-based enemy order from the state (0 = leftmost enemy).
   - END — end the player's turn.
   - WAIT [Milliseconds] — pause to allow animations (defaults to 250ms if omitted).
   - CHOOSE <OptionIndex> — pick a menu or reward option. When the state shows a pending hand/card selection (e.g., exhaust/discard/transform prompts), choose the card yourself by issuing CHOOSE with the 1-based index from the provided options.
   - STATE — request the latest state if more context is required.
   - KEY <Value> — press a CommunicationMod key literal (e.g., END_TURN, SPACE, 1).
-- All indices are strictly 1-based; index 1 selects the first option. Never use 0 or negative indices.
+- Card indices and CHOOSE commands are strictly 1-based; index 1 selects the first option. Never use 0 or negative values for these commands.
+- Monster targets are strictly 0-based; index 0 selects the leftmost enemy. Do not use negative target indices.
 - Avoid CLICK commands; target monsters with indices instead of coordinates.
 - Before ending the turn, attempt to play every beneficial card available; only issue END when no worthwhile plays remain or holding cards is strategically required.
 - If an action draws cards, reveals new choices, or introduces randomness, issue STATE and wait for the updated game state before considering END; never end the turn until the post-draw options have been evaluated.
@@ -433,7 +434,7 @@ function parsePlainCommandSegment(segment) {
         }
       }
       if (targetToken !== null) {
-        const targetIndex = parsePositiveInteger(targetToken, "Target index");
+        const targetIndex = parseNonNegativeInteger(targetToken, "Target index");
         step.args.target_index = targetIndex;
         renderedLine = `${renderedLine} ${targetIndex}`;
       }

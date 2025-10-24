@@ -65,10 +65,12 @@ browser tab, so no API key or model selection is required.
   instructions now demand explicit `CHOOSE <OptionIndex>` commands for these
   card selections using the 1-based ordering from `screen_state.hand` or
   `choice_list`, so ChatGPT will name the target instead of deferring to you.
-- Indices are strictly 1-based; index `1` selects the first option. The popup
-  normalizes any zero-based `CHOOSE` output from older prompts and will reject
-  negative values before sending the sequence to CommunicationMod.
-- The sequence textarea accepts plain-text commands (for example, `PLAY 2 1` or
+- Card indices and menu choices are strictly 1-based; index `1` selects the
+  first option. Monster target indices are 0-based (the leftmost enemy is
+  `0`). The popup normalizes any zero-based `CHOOSE` output from older prompts
+  and will reject negative values before sending the sequence to
+  CommunicationMod.
+- The sequence textarea accepts plain-text commands (for example, `PLAY 2 0` or
   `END`) and still understands the older JSON array/object format if you prefer
   it for manual tweaks. Any captured ChatGPT output is mirrored there before the
   bridge executes it so you can make quick edits.

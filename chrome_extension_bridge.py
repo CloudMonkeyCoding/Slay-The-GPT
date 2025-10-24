@@ -244,6 +244,28 @@ def parse_positive_index(value: Any, *, name: str) -> int:
     return number
 
 
+def parse_non_negative_index(value: Any, *, name: str, prefixes: Tuple[str, ...] = ()) -> int:
+    if value is None:
+        raise ValueError(f"{name} is required")
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if isinstance(value, (int, float)):
+        number = int(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{name} is required")
+        upper = text.upper()
+        for prefix in prefixes:
+            if upper.startswith(prefix):
+                upper = upper[len(prefix) :]
+                break
+        number = int(upper)
+    if number < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return number
+
+
 def resolve_card_index(args: Dict[str, Any]) -> int:
     if not isinstance(args, dict):
         raise ValueError('Card index could not be resolved from args')
@@ -283,7 +305,11 @@ def resolve_monster_index(args: Dict[str, Any]) -> Optional[int]:
         if isinstance(value, dict):
             continue
         try:
-            return parse_positive_index(value, name='Target index')
+            return parse_non_negative_index(
+                value,
+                name='Target index',
+                prefixes=('TARGET_', 'MONSTER_', 'ENEMY_'),
+            )
         except ValueError:
             continue
     return None
