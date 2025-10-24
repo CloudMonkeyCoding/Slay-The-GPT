@@ -1089,7 +1089,7 @@ async function planAction({ execute }) {
   planOutput.textContent = "Preparing prompt...";
   try {
     log("Starting planner flow: refreshing state for prompt generation.", "debug");
-    const { trimmed } = await refreshState({ silent: true });
+    const { trimmed } = await refreshState({ silent: false });
     log(
       trimmed && Object.keys(trimmed).length
         ? `Trimmed state fetched with ${Object.keys(trimmed).length} top-level key(s).`
