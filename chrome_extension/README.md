@@ -66,6 +66,9 @@ browser tab, so no API key or model selection is required.
   instructions now demand explicit `CHOOSE <OptionIndex>` commands for these
   card selections using the 1-based ordering from `screen_state.hand` or
   `choice_list`, so ChatGPT will name the target instead of deferring to you.
+- Indices are strictly 1-based; index `1` selects the first option. The popup
+  normalizes any zero-based `CHOOSE` output from older prompts and will reject
+  negative values before sending the sequence to CommunicationMod.
 - The manual command/sequence/log forms remain available below if you need to
   issue ad-hoc actions outside the automated workflow. The sequence textarea
   accepts plain-text commands (for example, `PLAY 2 1` or `END`) and still

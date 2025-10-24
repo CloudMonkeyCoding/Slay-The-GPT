@@ -15,6 +15,7 @@ Rules:
   - CHOOSE <OptionIndex> — pick a menu or reward option. When the state shows a pending hand/card selection (e.g., exhaust/discard/transform prompts), choose the card yourself by issuing CHOOSE with the 1-based index from the provided options.
   - STATE — request the latest state if more context is required.
   - KEY <Value> — press a CommunicationMod key literal (e.g., END_TURN, SPACE, 1).
+- All indices are strictly 1-based; index 1 selects the first option. Never use 0 or negative indices.
 - Avoid CLICK commands; target monsters with indices instead of coordinates.
 - Before ending the turn, attempt to play every beneficial card available; only issue END when no worthwhile plays remain or holding cards is strategically required.
 - If an action draws cards, reveals new choices, or introduces randomness, issue STATE and wait for the updated game state before considering END; never end the turn until the post-draw options have been evaluated.
@@ -488,6 +489,113 @@ function parsePlainCommandSequence(text) {
   return null;
 }
 
+function parseIntegerLike(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (!/^-?\d+$/.test(trimmed)) {
+      return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function normalizeChoiceIndicesInPlace(steps) {
+  if (!Array.isArray(steps)) {
+    return;
+  }
+  let adjusted = 0;
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i];
+    if (!step || typeof step !== "object") {
+      continue;
+    }
+    const command = String(step.command || "").toLowerCase();
+    if (command !== "choose") {
+      continue;
+    }
+
+    let args = step.args;
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      args = {};
+      step.args = args;
+    }
+
+    let sourceKey = null;
+    let rawValue = null;
+    const candidateKeys = ["index", "value", "choice"];
+
+    for (const key of candidateKeys) {
+      if (Object.prototype.hasOwnProperty.call(args, key)) {
+        sourceKey = key;
+        rawValue = args[key];
+        break;
+      }
+    }
+
+    if (rawValue === null) {
+      for (const key of candidateKeys) {
+        if (Object.prototype.hasOwnProperty.call(step, key)) {
+          sourceKey = key;
+          rawValue = step[key];
+          break;
+        }
+      }
+    }
+
+    if (rawValue === null) {
+      throw new Error(`CHOOSE command at position ${i + 1} is missing an option index.`);
+    }
+
+    const numeric = parseIntegerLike(rawValue);
+    if (numeric === null) {
+      throw new Error(
+        `CHOOSE command at position ${i + 1} must use a numeric option index (received '${rawValue}').`,
+      );
+    }
+    if (numeric < 0) {
+      throw new Error(
+        `CHOOSE command at position ${i + 1} must use a 1-based index (received ${numeric}).`,
+      );
+    }
+
+    const normalized = numeric === 0 ? 1 : numeric;
+    if (numeric === 0) {
+      adjusted += 1;
+    }
+
+    args.index = normalized;
+    if (sourceKey === "value" || Object.prototype.hasOwnProperty.call(args, "value")) {
+      args.value = normalized;
+    }
+    if (sourceKey === "choice" || Object.prototype.hasOwnProperty.call(args, "choice")) {
+      args.choice = normalized;
+    }
+
+    for (const key of candidateKeys) {
+      if (Object.prototype.hasOwnProperty.call(step, key) && key !== "command" && key !== "args") {
+        delete step[key];
+      }
+    }
+  }
+  if (adjusted > 0) {
+    log(`Normalized ${adjusted} CHOOSE step(s) from 0-based to 1-based indices.`, "debug");
+  }
+}
+
 function extractJSONSnippet(text) {
   if (!text) {
     return null;
@@ -546,6 +654,7 @@ function parseSequenceText(text) {
   if (!Array.isArray(steps)) {
     throw new Error("Response JSON is missing a 'sequence' or 'steps' array.");
   }
+  normalizeChoiceIndicesInPlace(steps);
   return { steps, representation: candidate, format: "json", payload };
 }
 
